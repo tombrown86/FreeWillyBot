@@ -1,0 +1,4 @@
+{
+  "no_trade_threshold": 0.6,
+  "baseline": "logreg"
+}

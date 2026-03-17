@@ -1,0 +1,81 @@
+{
+  "full_filtered": {
+    "cum_return": -0.0349250233830275,
+    "max_drawdown": 0.14636532352439272,
+    "profit_factor": 0.978067088289798,
+    "num_trades": 914
+  },
+  "unfiltered": {
+    "cum_return": -0.10433226333871304,
+    "max_drawdown": 0.2722416935508964,
+    "profit_factor": 0.9530830884642387,
+    "num_trades": 1437
+  },
+  "filter_stats_full": {
+    "macro_blackout_bars": 1196,
+    "spread_proxy_bars": 0,
+    "weak_confidence_bars": 0,
+    "max_daily_loss_bars": 895,
+    "cooldown_bars": 3168,
+    "weekend_bars": 0,
+    "session_exclude_bars": 0
+  },
+  "per_filter": {
+    "vol_regime": {
+      "bars_blocked": 0,
+      "trades_with_filter": 914,
+      "trades_without_filter": 914,
+      "trades_prevented": 0,
+      "cum_return_without_filter": -0.0349250233830275,
+      "pnl_improvement": 0.0
+    },
+    "macro_blackout": {
+      "bars_blocked": 1196,
+      "trades_with_filter": 914,
+      "trades_without_filter": 954,
+      "trades_prevented": 40,
+      "cum_return_without_filter": -0.0062284121661817515,
+      "pnl_improvement": -0.028696611216845747
+    },
+    "cooldown_after_loss": {
+      "bars_blocked": 3168,
+      "trades_with_filter": 914,
+      "trades_without_filter": 1352,
+      "trades_prevented": 438,
+      "cum_return_without_filter": -0.08061334608513093,
+      "pnl_improvement": 0.045688322702103434
+    },
+    "max_daily_loss": {
+      "bars_blocked": 895,
+      "trades_with_filter": 914,
+      "trades_without_filter": 925,
+      "trades_prevented": 11,
+      "cum_return_without_filter": -0.07293862495090031,
+      "pnl_improvement": 0.03801360156787281
+    },
+    "confidence_ok": {
+      "bars_blocked": 0,
+      "trades_with_filter": 914,
+      "trades_without_filter": 914,
+      "trades_prevented": 0,
+      "cum_return_without_filter": -0.0349250233830275,
+      "pnl_improvement": 0.0
+    },
+    "session_ok": {
+      "bars_blocked": 0,
+      "trades_with_filter": 914,
+      "trades_without_filter": 914,
+      "trades_prevented": 0,
+      "cum_return_without_filter": -0.0349250233830275,
+      "pnl_improvement": 0.0
+    },
+    "weekend_ok": {
+      "bars_blocked": 0,
+      "trades_with_filter": 914,
+      "trades_without_filter": 914,
+      "trades_prevented": 0,
+      "cum_return_without_filter": -0.0349250233830275,
+      "pnl_improvement": 0.0
+    }
+  }
+}

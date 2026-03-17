@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-03-16T21:02:57.431972",
+  "config": {
+    "symbol": "EURUSD",
+    "test_start": "2024-01-01",
+    "no_trade_threshold": 0.35,
+    "cost_per_leg": 0.0001,
+    "n_bars": 164562
+  },
+  "filters_applied": [
+    "macro_blackout",
+    "spread_proxy",
+    "weak_confidence",
+    "max_daily_loss",
+    "cooldown_after_loss"
+  ],
+  "filter_stats": {
+    "macro_blackout_bars": 1196,
+    "spread_proxy_bars": 0,
+    "weak_confidence_bars": 122889,
+    "max_daily_loss_bars": 1476,
+    "cooldown_bars": 12433,
+    "weekend_bars": 0,
+    "session_exclude_bars": 0
+  },
+  "strategy": {
+    "cumulative_return": -0.341541485207014,
+    "max_drawdown": 0.4132108252742939,
+    "sharpe_ratio": -2.2339205285781523,
+    "profit_factor": 0.9444107122586306,
+    "num_trades": 4264,
+    "avg_return_per_trade": 7.977226650487944e-05
+  },
+  "baseline_momentum": {
+    "cumulative_return": -0.9997906305062613,
+    "max_drawdown": 0.999798844535913,
+    "sharpe_ratio": -21.158372988056865,
+    "profit_factor": 0.7831275343812101,
+    "num_trades": 36862,
+    "avg_return_per_trade": -2.3207434408529085e-06
+  },
+  "baseline_flat": {
+    "cumulative_return": 0.0,
+    "max_drawdown": 0.0,
+    "sharpe_ratio": 0.0,
+    "profit_factor": 0.0,
+    "num_trades": 0,
+    "avg_return_per_trade": 0.0
+  }
+}

@@ -1,0 +1,6 @@
+config,cum_return,max_dd,sharpe,profit_factor,n_trades
+full,-0.0349,0.1464,-0.44,0.98,914
+no_forecasters,-0.0265,0.1372,-0.32,0.98,882
+price_only,-0.2047,0.2357,-2.37,0.89,3580
+chronos_only,-0.9947,0.9947,-21.92,0.68,35065
+momentum,-0.9888,0.9892,-17.68,0.75,27681

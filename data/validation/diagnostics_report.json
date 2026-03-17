@@ -1,0 +1,165 @@
+{
+  "run_at": "2026-03-16T23:26:22.751496",
+  "checks": [
+    {
+      "stage": "raw_price",
+      "duplicates": 1451,
+      "total_rows": 315545,
+      "unique_timestamps": 314094
+    },
+    {
+      "stage": "processed_bars",
+      "duplicates": 0,
+      "total_rows": 314094,
+      "has_tz": true
+    },
+    {
+      "stage": "aligned",
+      "cross_asset_duplicates": 0,
+      "macro_duplicates": 0
+    },
+    {
+      "stage": "missing_bars",
+      "expected": 315558,
+      "actual": 314094,
+      "missing": 8346,
+      "missing_pct": 2.64,
+      "gap_samples": [
+        {
+          "start": "2022-01-07 22:00:00",
+          "count": 24
+        },
+        {
+          "start": "2022-01-14 22:00:00",
+          "count": 24
+        },
+        {
+          "start": "2022-01-21 22:00:00",
+          "count": 24
+        },
+        {
+          "start": "2022-01-28 22:00:00",
+          "count": 24
+        },
+        {
+          "start": "2022-02-04 22:00:00",
+          "count": 24
+        }
+      ]
+    },
+    {
+      "stage": "bar_spacing",
+      "valid": true,
+      "invalid_diffs": 0,
+      "sample_invalid": []
+    },
+    {
+      "stage": "zero_prices",
+      "raw": {
+        "total_rows": 171307
+      },
+      "processed": {
+        "total_rows": 314094
+      }
+    },
+    {
+      "stage": "impossible_jumps",
+      "count": 0,
+      "max_return_pct": 0,
+      "sample_timestamps": []
+    },
+    {
+      "stage": "no_label_leakage",
+      "valid": true,
+      "violations": []
+    },
+    {
+      "stage": "timezone_consistency",
+      "valid": true,
+      "issues": []
+    },
+    {
+      "stage": "news_duplicates",
+      "files": {
+        "news_cleaned_20260309_20260316.csv": {
+          "rows": 436,
+          "duplicates": 218
+        },
+        "news_gkg_20220101_20260316.csv": {
+          "rows": 1515,
+          "duplicates": 0
+        }
+      },
+      "total_duplicates": 218
+    },
+    {
+      "stage": "merged_features_duplicates",
+      "files": {
+        "train": {
+          "rows": 131000,
+          "duplicates": 0
+        },
+        "validation": {
+          "rows": 18526,
+          "duplicates": 0
+        },
+        "test": {
+          "rows": 164562,
+          "duplicates": 0
+        }
+      },
+      "total_duplicates": 0
+    },
+    {
+      "stage": "features",
+      "files": {
+        "train": {
+          "rows": 131000,
+          "nan_pct": {
+            "return_1": 0.0,
+            "return_5": 0.0,
+            "volatility_20": 0.02,
+            "rsi_14": 0.0,
+            "ma_gap_20": 0.01,
+            "ma_gap_50": 0.04,
+            "SP500_return_1": 0.24,
+            "SP500_return_5": 0.24,
+            "SP500_return_20": 0.24,
+            "VIX_return_1": 0.24,
+            "VIX_return_5": 0.24,
+            "VIX_return_20": 0.24,
+            "GOLD_return_1": 0.24,
+            "GOLD_return_5": 0.24,
+            "GOLD_return_20": 0.24,
+            "OIL_return_1": 0.24,
+            "OIL_return_5": 0.24,
+            "OIL_return_20": 0.24,
+            "TREASURY_10Y_return_1": 0.0,
+            "TREASURY_10Y_return_5": 0.0,
+            "TREASURY_10Y_return_20": 0.02,
+            "TREASURY_10Y_change_1": 0.0,
+            "TREASURY_10Y_change_5": 0.0
+          }
+        },
+        "validation": {
+          "rows": 18526,
+          "nan_pct": {}
+        },
+        "test": {
+          "rows": 164562,
+          "nan_pct": {
+            "minutes_to_event": 11.45
+          }
+        }
+      },
+      "critical_nan_columns": []
+    },
+    {
+      "stage": "forecaster_merge",
+      "test_rows": 164562,
+      "forecaster_rows": 314094,
+      "merged_rows": 164562,
+      "nan_forecaster_pct": 0.0
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+bin,n_trades,hit_rate,mean_return,profit_factor
+top_1_5,2469,0.5034,5e-06,1.02
+top_5_10,2468,0.5016,-5e-05,0.86
+top_10_20,4937,0.5116,2.5e-05,1.07

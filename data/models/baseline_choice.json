@@ -1,0 +1,23 @@
+{
+  "baseline": "logreg",
+  "xgb_scores": {
+    "mean_accuracy": 0.5211256604784125,
+    "mean_precision": 0.4190974367298441,
+    "mean_recall": 0.40432230007019593,
+    "std_precision": 0.009857510938122612,
+    "std_recall": 0.009823943777718948,
+    "mean_brier": 0.5861745385990795,
+    "mean_net_return": -0.11187237669235309,
+    "n_folds": 9
+  },
+  "logreg_scores": {
+    "mean_accuracy": 0.5285246304453544,
+    "mean_precision": 0.3093120135135521,
+    "mean_recall": 0.3562869487204579,
+    "std_precision": 0.05891777676937907,
+    "std_recall": 0.012939758699001562,
+    "mean_brier": 0.5815622905442622,
+    "mean_net_return": -0.038471492288609924,
+    "n_folds": 9
+  }
+}

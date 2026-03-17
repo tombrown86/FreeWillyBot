@@ -1,0 +1,16 @@
+[
+  "return_1",
+  "return_5",
+  "volatility_20",
+  "rsi_14",
+  "macd",
+  "macd_signal",
+  "macd_hist",
+  "atr_14",
+  "ma_gap_20",
+  "ma_gap_50",
+  "is_london_session",
+  "is_ny_session",
+  "chronos_pred_return",
+  "timesfm_pred_return"
+]

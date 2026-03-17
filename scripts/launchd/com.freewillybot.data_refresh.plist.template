@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.freewillybot.data_refresh</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PROJECT_ROOT@/.venv/bin/python</string>
+    <string>-m</string>
+    <string>scripts.run_daily_data_refresh</string>
+  </array>
+  <key>WorkingDirectory</key><string>@PROJECT_ROOT@</string>
+  <key>StandardOutPath</key><string>@PROJECT_ROOT@/data/logs/data_refresh_stdout.log</string>
+  <key>StandardErrorPath</key><string>@PROJECT_ROOT@/data/logs/data_refresh_stderr.log</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>0</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+</dict>
+</plist>
