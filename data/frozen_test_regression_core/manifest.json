@@ -1,0 +1,8 @@
+{
+  "freeze_date": "2026-03-17",
+  "freeze_run_at": "2026-03-17T13:05:29.517798+00:00",
+  "test_start_date": "2024-01-01",
+  "file": "test_20260317.parquet",
+  "source": "test.parquet",
+  "feature_set": "core"
+}

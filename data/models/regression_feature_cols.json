@@ -1,0 +1,22 @@
+[
+  "ret_1",
+  "ret_3",
+  "ret_6",
+  "ret_12",
+  "vol_6",
+  "vol_12",
+  "vol_24",
+  "ma_10_gap",
+  "ma_20_gap",
+  "ma_50_gap",
+  "ma_slope_10",
+  "sp500_ret",
+  "vix_ret",
+  "gold_ret",
+  "oil_ret",
+  "us10y_change",
+  "is_london_session",
+  "is_ny_session",
+  "is_event_day",
+  "is_event_window"
+]

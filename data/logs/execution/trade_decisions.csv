@@ -1,2 +1,0 @@
-timestamp,signal,action_taken,broker_response,run_at
-2026-03-16 15:55:00 UTC,SELL,OPEN_SHORT_SIMULATED,"{""simulated"": true, ""side"": ""sell""}",2026-03-16 22:19:14

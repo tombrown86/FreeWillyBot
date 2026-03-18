@@ -1,0 +1,5 @@
+{
+  "horizon": 6,
+  "model": "xgb",
+  "target_col": "target_ret_6"
+}

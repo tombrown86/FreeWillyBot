@@ -33,8 +33,8 @@ LABEL_HORIZON_BARS = 6
 BUY_THRESHOLD_PCT = 0.0003
 SELL_THRESHOLD_PCT = -0.0003
 
-# Use news + FinBERT sentiment when news files exist
-USE_NEWS = True
+# Use news + FinBERT sentiment when news files exist (temporarily disabled)
+USE_NEWS = False
 
 # Phase 17 — Ablation: False = price + time only (no cross-asset, no macro)
 USE_EXOGENOUS = True
@@ -78,3 +78,30 @@ TRADE_DECISIONS_CSV = "data/logs/execution/trade_decisions.csv"
 
 # Phase 18 — Data quality
 MAX_BAR_RETURN_PCT = 0.05  # Flag bars with abs(return) > 5% as impossible jump
+
+# Regression experiment (Batch 1) — multi-horizon return targets, no Chronos/TimesFM
+REGRESSION_HORIZONS = [3, 6, 12]  # bars ahead for target_ret_h
+
+# Batch 2 — Feature set: "core" (minimal) | "full" (Batch 1 classifier-style)
+FEATURE_SET = "core"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Production config — regression strategy (locked after final validation)
+# Validated on out-of-sample test period Jan–Dec 2024.
+# Full-period: net +5.4%, PF 1.34, max DD 3.9%, 721 trades.
+# With KS+DD risk controls: net sum flips positive on walk-forward,
+#   worst month -1.67%, max DD 2.01%.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Selection
+REGRESSION_TOP_PCT: float = 0.25         # trade top/bottom 0.25% of predictions
+REGRESSION_VOL_PCT: int = 20             # trade only when vol_6 in top 20%
+REGRESSION_PRED_THRESHOLD: float = 0.00005  # |pred| must exceed this to trade
+
+# Risk controls — kill switch (trade-based)
+REGRESSION_KILL_SWITCH_N: int = 20       # evaluate rolling PF after every 20 completed trades
+REGRESSION_KILL_SWITCH_PF: float = 0.9  # pause if rolling PF of last 20 trades < 0.9
+
+# Risk controls — drawdown kill
+REGRESSION_DD_KILL: float = 0.02        # pause when drawdown from equity peak exceeds 2%
+REGRESSION_PAUSE_BARS: int = 72         # resume after 72 bars (= 6 hours at 5-min bars)
