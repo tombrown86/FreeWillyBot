@@ -1,0 +1,26 @@
+# Dependencies and local env
+.venv/
+.env
+.env.*
+!.env.example
+
+# Git and IDE
+.git/
+.gitignore
+.dockerignore
+.DS_Store
+*.md
+!README.md
+
+# Test / dev
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Large or host-specific data (mount at runtime instead)
+data/raw/
+data/processed/

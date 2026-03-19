@@ -1,0 +1,32 @@
+# FreeWillyBot — run 24/7 on Linux (e.g. Kubuntu). After git pull: docker compose up -d --build
+# Bot only: docker compose up -d bot
+# With dashboard: docker compose up -d
+
+services:
+  bot:
+    build: .
+    image: freewillybot:latest
+    container_name: freewillybot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - LIVETICK_INTERVAL_SEC=120
+    volumes:
+      - ./data:/app/data
+    # One-off: data refresh or train (then remove command to resume loop)
+    # command: ["scripts.run_daily_data_refresh"]
+    # command: ["scripts.run_train_regression"]
+
+  dashboard:
+    build: .
+    image: freewillybot:latest
+    container_name: freewillybot-dashboard
+    restart: unless-stopped
+    env_file: .env
+    command: ["scripts.run_dashboard", "--port", "5050"]
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./data:/app/data
+    profiles:
+      - dashboard

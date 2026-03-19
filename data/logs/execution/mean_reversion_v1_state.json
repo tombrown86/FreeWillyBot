@@ -1,10 +1,12 @@
 {
   "position": 0,
   "bars_held": 0,
-  "n_trades": 0,
-  "trade_rets": [],
+  "n_trades": 1,
+  "trade_rets": [
+    -0.0011993326207849764
+  ],
   "peak_equity": 1.0,
-  "current_equity": 1.0,
+  "current_equity": 0.998800667379215,
   "trade_start_equity": 1.0,
   "day_start_equity": 1.0,
   "current_day": 1773878400000000000,

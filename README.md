@@ -71,6 +71,40 @@ python scripts/run_dashboard.py
 
 ---
 
+## Docker (Linux 24/7)
+
+Run the bot in Docker on a Linux machine (e.g. Kubuntu) so it keeps running after you close the terminal. Data and state live in `./data` on the host, so they survive `git pull` and image rebuilds.
+
+**First-time setup on the Linux box:**
+
+```bash
+git clone <repo-url> FreeWillyBot && cd FreeWillyBot
+cp .env.example .env   # edit if you use FRED or broker APIs; can leave empty for paper-only
+docker compose up -d --build
+```
+
+The **livetick** container runs the paper-trading loop every 2 minutes (same as the Mac launchd job). To change the interval, set `LIVETICK_INTERVAL_SEC` in `docker-compose.yml` or in `.env`.
+
+**Optional — one-off data refresh or train (e.g. after first clone or to catch up):**
+
+```bash
+docker compose run --rm bot scripts.run_daily_data_refresh
+docker compose run --rm bot scripts.run_train_regression   # if you need a fresh model
+```
+
+**Optional — web dashboard** (Flask on port 5050):
+
+```bash
+docker compose --profile dashboard up -d
+# Open http://localhost:5050 (or http://<machine-ip>:5050 from another device)
+```
+
+**After a git pull:** `docker compose up -d --build` to rebuild and restart. Your `data/` and `.env` are unchanged.
+
+**Logs:** `docker compose logs -f bot`
+
+---
+
 ## Project layout (high level)
 
 ```
