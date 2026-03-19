@@ -1,6 +1,16 @@
 # FreeWillyBot
 
+<p align="center">
+  <img src="assets/logo.png" alt="Free Willy" width="200">
+</p>
+
 Research and paper-trading stack for **5-minute EUR/USD** (configurable). It trains forecasting models, backtests strategies with costs and risk controls, and runs **multi-strategy paper signals** with a local web dashboard. **No live money** is used by default (`EXECUTION_PAPER_ONLY = True`).
+
+### Dashboard
+
+| Strategies & signal log | Demo broker & backtest |
+|------------------------|------------------------|
+| ![Dashboard overview](assets/dashboard-overview.png) | ![Dashboard backtest](assets/dashboard-backtest.png) |
 
 ---
 
