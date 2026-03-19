@@ -4,7 +4,7 @@
   <img src="assets/logo.png" alt="Free Willy" width="200">
 </p>
 
-Research and paper-trading stack for **5-minute EUR/USD** (configurable). **AI/ML** forecasting (classifier + regression), walk-forward validation, and backtests with costs and risk controls. **Wired for cTrader** for live data and execution as well as paper/demo trading. Multi-strategy signals and a local web dashboard. **No live money** by default (`EXECUTION_PAPER_ONLY = True`).
+Live trading system as well as research and paper-trading stack, currently for **5-minute EUR/USD** (configurable). **AI/ML** forecasting (classifier + regression), walk-forward validation, and backtests with costs and risk controls. **Wired for cTrader** for live data and execution as well as paper/demo trading. Multi-strategy signals and a local web dashboard.
 
 ### Dashboard
 
@@ -110,6 +110,22 @@ Adding a new strategy: implement `run(n_bars=1)` returning signal dicts, then re
 ## Configuration
 
 All shared settings live in **`src/config.py`**: symbol, bar interval, train/test windows, spread/cost assumptions, classifier filters, and **locked regression production parameters** (`REGRESSION_TOP_PCT`, `REGRESSION_VOL_PCT`, `REGRESSION_PRED_THRESHOLD`, kill switch and drawdown settings).
+
+---
+
+## Next stages
+
+Planned or partially wired features to make the stack richer:
+
+| Area | What’s coming / in the pipeline |
+|------|----------------------------------|
+| **News** | GDELT GKG ingestion and sentiment (e.g. FinBERT) as model inputs; ablation path already in place (`USE_NEWS`, `run_ablation.py`). |
+| **Cross-asset** | SP500, VIX, gold, oil, and rates (e.g. 10Y) as aligned features; downloads and alignment scripts exist; optional in training and live. |
+| **Macro** | FRED series (CPI, Fed funds, Treasury) and an event calendar; macro blackout windows to avoid trading through major releases. |
+| **More assets** | Extend beyond EUR/USD (e.g. more FX or instruments) with the same pipeline and cTrader/data wiring. |
+| **Forecasters** | Optional Chronos-style forecasters in the refresh pipeline for extra signal. |
+
+These are the next stages we’re feeding in; config and scripts are set up so they can be turned on as they’re validated.
 
 ---
 
