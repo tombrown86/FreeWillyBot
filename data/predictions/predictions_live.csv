@@ -102,3 +102,6 @@ mean_reversion_v1,2026-03-19 18:45:00 UTC,FLAT,1.018881,0,,NONE,1.018881,0.0,-1.
 classifier_v1,2026-03-19 17:05:00 UTC,FLAT,0.359567629752603,0,,NONE,0.2291232530051097,0.359567629752603,,33,No side: max prob 0.36 (need ≥0.60 for long/short),test_csv_tail,1.83,2026-03-19 18:54:37
 regression_v1,2026-03-19 18:45:00 UTC,FLAT,1.299e-05,0,,NONE,1.299e-05,0.0,1.299e-05,48,Vol gate ok (≈84th pctile) · |pred| too small for trade (0.000013 ≤ 5e-05),regression_features_tail,0.16,2026-03-19 18:54:37
 mean_reversion_v1,2026-03-19 18:45:00 UTC,FLAT,1.018881,0,,NONE,1.018881,0.0,-1.018881,58,"z=-1.02, need |z| ≥ 2.0 (0.98 to threshold)",mean_reversion_features_tail,0.16,2026-03-19 18:54:37
+classifier_v1,2026-03-19 17:05:00 UTC,FLAT,0.359567629752603,0,,NONE,0.2291232530051097,0.359567629752603,,33,No side: max prob 0.36 (need ≥0.60 for long/short),test_csv_tail,1.87,2026-03-19 18:56:58
+regression_v1,2026-03-19 18:50:00 UTC,FLAT,2.935e-05,0,,NONE,0.0,2.935e-05,-2.935e-05,48,Vol gate ok (≈81th pctile) · |pred| too small for trade (0.000029 ≤ 5e-05),regression_features_tail,0.12,2026-03-19 18:56:58
+mean_reversion_v1,2026-03-19 18:50:00 UTC,FLAT,0.790517,0,,NONE,0.790517,0.0,-0.790517,51,"z=-0.79, need |z| ≥ 2.0 (1.21 to threshold)",mean_reversion_features_tail,0.12,2026-03-19 18:56:58

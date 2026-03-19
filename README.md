@@ -4,7 +4,7 @@
   <img src="assets/logo.png" alt="Free Willy" width="200">
 </p>
 
-Research and paper-trading stack for **5-minute EUR/USD** (configurable). It trains forecasting models, backtests strategies with costs and risk controls, and runs **multi-strategy paper signals** with a local web dashboard. **No live money** is used by default (`EXECUTION_PAPER_ONLY = True`).
+Research and paper-trading stack for **5-minute EUR/USD** (configurable). **AI/ML** forecasting (classifier + regression), walk-forward validation, and backtests with costs and risk controls. **Wired for cTrader** for live data and execution as well as paper/demo trading. Multi-strategy signals and a local web dashboard. **No live money** by default (`EXECUTION_PAPER_ONLY = True`).
 
 ### Dashboard
 
@@ -23,7 +23,7 @@ Research and paper-trading stack for **5-minute EUR/USD** (configurable). It tra
 | **Paper trading** | `scripts/run_live_tick.py` runs every strategy each tick: signals → `predictions_live.csv`. **Paper execution is on by default**: per-strategy simulated position + equity (bar-by-bar returns), logged to `trade_decisions.csv` and `paper_simulation.csv`. Use `--demo-broker` (or `RUN_LIVETICK_DEMO_BROKER=1`) to send real orders to the configured demo broker (cTrader/OANDA/Binance). Use `--no-execute` for signals only. |
 | **Dashboard** | Flask app: metrics, walk-forward tables, cost stress, live signal log, simulated vs (future) real trade sections. |
 
-Data pipeline: Dukascopy (and optional cross-asset / macro features). See `src/config.py` for symbol, bar size, train/validation/test dates, and execution flags.
+Data pipeline: Dukascopy for historical; **cTrader** for live data and trades (plus optional cross-asset / macro). See `src/config.py` for symbol, bar size, train/validation/test dates, and execution flags.
 
 ---
 
