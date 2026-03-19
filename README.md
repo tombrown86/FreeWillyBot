@@ -4,7 +4,7 @@
   <img src="assets/logo.png" alt="Free Willy" width="200">
 </p>
 
-Live trading system as well as research and paper-trading stack, currently for **5-minute EUR/USD** (configurable). **AI/ML** forecasting (classifier + regression), walk-forward validation, and backtests with costs and risk controls. **Wired for cTrader** for live data and execution as well as paper/demo trading. Multi-strategy signals and a local web dashboard.
+Live trading system as well as research and paper-trading stack, currently for **5-minute EUR/USD** (configurable). **AI/ML** forecasting (classifier + regression) plus a **rule-based mean reversion** strategy, walk-forward validation, and backtests with costs and risk controls. **Wired for cTrader** for live data and execution as well as paper/demo trading. Multi-strategy signals and a local web dashboard.
 
 ### Dashboard
 
@@ -20,6 +20,7 @@ Live trading system as well as research and paper-trading stack, currently for *
 |-------|-------------|
 | **Classifier strategy** (`classifier_v1`) | XGBoost-style directional model with session, volatility, and confidence filters. |
 | **Regression strategy** (`regression_v1`) | Return forecast + extreme selection (top/bottom predictions, vol filter) + **kill switch** (rolling profit factor) + **drawdown pause**. Production parameters are locked in `src/config.py` under `REGRESSION_*`. |
+| **Mean reversion strategy** (`mean_reversion_v1`) | Rule-based: z-score of 20-bar MA gap; BUY/SELL when price stretches too far from its average, with session/macro/vol filters and kill-switch. No ML — deterministic and interpretable. |
 | **Paper trading** | `scripts/run_live_tick.py` runs every strategy each tick: signals → `predictions_live.csv`. **Paper execution is on by default**: per-strategy simulated position + equity (bar-by-bar returns), logged to `trade_decisions.csv` and `paper_simulation.csv`. Use `--demo-broker` (or `RUN_LIVETICK_DEMO_BROKER=1`) to send real orders to the configured demo broker (cTrader/OANDA/Binance). Use `--no-execute` for signals only. |
 | **Dashboard** | Flask app: metrics, walk-forward tables, cost stress, live signal log, simulated vs (future) real trade sections. |
 
