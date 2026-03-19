@@ -177,3 +177,9 @@ mean_reversion_v1,2026-03-19 20:15:00 UTC,FLAT,0.868975,0,,NONE,0.868975,0.0,-0.
 classifier_v1,2026-03-19 17:05:00 UTC,FLAT,0.359567629752603,0,,NONE,0.2291232530051097,0.359567629752603,,33,No side: max prob 0.36 (need ≥0.60 for long/short),test_csv_tail,3.31,2026-03-19 20:23:19
 regression_v1,2026-03-19 20:15:00 UTC,FLAT,4.362e-05,0,,NONE,0.0,4.362e-05,-4.362e-05,48,Vol gate ok (≈81th pctile) · |pred| too small for trade (0.000044 ≤ 5e-05),regression_features_tail,0.14,2026-03-19 20:23:19
 mean_reversion_v1,2026-03-19 20:15:00 UTC,FLAT,0.868975,0,,NONE,0.868975,0.0,-0.868975,53,"z=-0.87, need |z| ≥ 2.0 (1.13 to threshold)",mean_reversion_features_tail,0.14,2026-03-19 20:23:19
+classifier_v1,2026-03-19 17:05:00 UTC,FLAT,0.359567629752603,0,,NONE,0.2291232530051097,0.359567629752603,,33,No side: max prob 0.36 (need ≥0.60 for long/short),test_csv_tail,3.34,2026-03-19 20:25:32
+regression_v1,2026-03-19 20:20:00 UTC,FLAT,5.83e-05,0,,NONE,0.0,5.83e-05,-5.83e-05,55,Vol low vs gate (bar ≈80th pct; need ~top 20% ≈80+) · |pred| ok (0.000058 > 5e-05),regression_features_tail,0.09,2026-03-19 20:25:32
+mean_reversion_v1,2026-03-19 20:20:00 UTC,FLAT,1.039747,1,vol_regime,NONE,1.039747,0.0,-1.039747,58,"Blocked: vol_regime · z=-1.04, need |z| ≥ 2.0 (0.96 to threshold)",mean_reversion_features_tail,0.09,2026-03-19 20:25:32
+classifier_v1,2026-03-19 17:05:00 UTC,FLAT,0.359567629752603,0,,NONE,0.2291232530051097,0.359567629752603,,33,No side: max prob 0.36 (need ≥0.60 for long/short),test_csv_tail,3.38,2026-03-19 20:27:45
+regression_v1,2026-03-19 20:20:00 UTC,FLAT,5.83e-05,0,,NONE,0.0,5.83e-05,-5.83e-05,55,Vol low vs gate (bar ≈80th pct; need ~top 20% ≈80+) · |pred| ok (0.000058 > 5e-05),regression_features_tail,0.13,2026-03-19 20:27:45
+mean_reversion_v1,2026-03-19 20:20:00 UTC,FLAT,1.039747,1,vol_regime,NONE,1.039747,0.0,-1.039747,58,"Blocked: vol_regime · z=-1.04, need |z| ≥ 2.0 (0.96 to threshold)",mean_reversion_features_tail,0.13,2026-03-19 20:27:45
