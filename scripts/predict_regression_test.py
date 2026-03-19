@@ -90,6 +90,9 @@ def run() -> int:
         out["ret_12"] = df["ret_12"].values
     if "vol_6" in df.columns:
         out["vol_change"] = df["vol_6"].diff().values
+    # 1-bar return for paper PnL (target_ret is multi-bar forward)
+    if "ret_1" in df.columns:
+        out["ret_1"] = df["ret_1"].values
 
     PREDICTIONS_DIR.mkdir(parents=True, exist_ok=True)
     out.to_parquet(PREDICTIONS_DIR / "test_predictions.parquet", index=False)

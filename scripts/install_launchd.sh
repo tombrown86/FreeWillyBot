@@ -22,4 +22,4 @@ for template in "$LAUNCHD_DIR"/*.plist.template; do
   echo "  Loaded $plist"
 done
 
-echo "Done. Jobs: com.freewillybot.livetick (every 5 min), com.freewillybot.data_refresh (00:00), com.freewillybot.retrain (00:30)"
+echo "Done. Jobs: com.freewillybot.livetick (every 2 min; stale heartbeat/features → auto data refresh), com.freewillybot.data_refresh (00:00 + RunAtLoad catch-up), com.freewillybot.retrain (00:30 + RunAtLoad catch-up)"

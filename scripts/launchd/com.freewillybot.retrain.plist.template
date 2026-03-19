@@ -8,10 +8,16 @@
     <string>@PROJECT_ROOT@/.venv/bin/python</string>
     <string>-m</string>
     <string>scripts.run_daily_retrain</string>
+    <!-- On boot/login catch-up: skip if a successful retrain already ran within 20h -->
+    <string>--skip-if-recent</string>
+    <string>20</string>
   </array>
   <key>WorkingDirectory</key><string>@PROJECT_ROOT@</string>
   <key>StandardOutPath</key><string>@PROJECT_ROOT@/data/logs/retrain_stdout.log</string>
   <key>StandardErrorPath</key><string>@PROJECT_ROOT@/data/logs/retrain_stderr.log</string>
+  <!-- Run on login/boot so a missed midnight job catches up automatically -->
+  <key>RunAtLoad</key><true/>
+  <!-- Also run at 00:30 every day (after data_refresh at 00:00) -->
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key><integer>0</integer>

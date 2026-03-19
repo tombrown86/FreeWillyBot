@@ -53,6 +53,23 @@ def build_regression_targets(price: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def build_regression_targets_with_tail(price: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Returns (targets_df, tail_df) where:
+    - targets_df: rows with complete targets (all horizons available), same as build_regression_targets
+    - tail_df: the last max_h rows that have features but no complete targets yet — for live inference
+    """
+    df = price[["timestamp", "close"]].copy()
+    close = df["close"]
+    max_h = max(REGRESSION_HORIZONS)
+    for h in REGRESSION_HORIZONS:
+        df[f"target_ret_{h}"] = (close.shift(-h) / close) - 1
+    df = df.drop(columns=["close"])
+    targets_df = df.iloc[:-max_h]
+    tail_df = df.iloc[-max_h:][["timestamp"]]
+    return targets_df, tail_df
+
+
 def build_core_price_features(price: pd.DataFrame) -> pd.DataFrame:
     """Core price features: ret_1/3/6/12, vol_6/12/24, ma gaps, ma_slope_10."""
     df = price[["timestamp"]].copy()
@@ -172,7 +189,7 @@ def run() -> None:
     cross_feat = build_core_cross_asset_features(price, cross, macro) if use_exog else price[["timestamp"]].copy()
     time_feat = build_core_time_features(price)
     macro_feat = build_core_macro_features(price, events) if use_exog else build_core_macro_features(price, None)
-    targets = build_regression_targets(price)
+    targets, tail_timestamps = build_regression_targets_with_tail(price)
 
     for name, feat_df in [("cross", cross_feat), ("time", time_feat), ("macro", macro_feat)]:
         drop = [c for c in feat_df.columns if c != "timestamp"]
@@ -185,17 +202,19 @@ def run() -> None:
                 df = df.drop_duplicates(subset=["timestamp"], keep="first")
 
     target_cols = [f"target_ret_{h}" for h in REGRESSION_HORIZONS]
-    df = df.merge(targets, on="timestamp", how="inner")
-    feature_cols = [c for c in df.columns if c not in ("timestamp",) + tuple(target_cols)]
-    df = df.dropna(subset=target_cols + feature_cols)
+    feature_cols = [c for c in df.columns if c != "timestamp"]
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    train = df[df["timestamp"] < pd.Timestamp(VALIDATION_START_DATE, tz="UTC")]
-    val = df[
-        (df["timestamp"] >= pd.Timestamp(VALIDATION_START_DATE, tz="UTC"))
-        & (df["timestamp"] < pd.Timestamp(TEST_START_DATE, tz="UTC"))
+    # Full dataset with targets (for training/backtesting)
+    df_with_targets = df.merge(targets, on="timestamp", how="inner")
+    df_with_targets = df_with_targets.dropna(subset=target_cols + feature_cols)
+
+    df_with_targets["timestamp"] = pd.to_datetime(df_with_targets["timestamp"], utc=True)
+    train = df_with_targets[df_with_targets["timestamp"] < pd.Timestamp(VALIDATION_START_DATE, tz="UTC")]
+    val = df_with_targets[
+        (df_with_targets["timestamp"] >= pd.Timestamp(VALIDATION_START_DATE, tz="UTC"))
+        & (df_with_targets["timestamp"] < pd.Timestamp(TEST_START_DATE, tz="UTC"))
     ]
-    test = df[df["timestamp"] >= pd.Timestamp(TEST_START_DATE, tz="UTC")]
+    test = df_with_targets[df_with_targets["timestamp"] >= pd.Timestamp(TEST_START_DATE, tz="UTC")]
 
     for name, split in [("train", train), ("validation", val), ("test", test)]:
         split.to_csv(FEATURES_REGRESSION_CORE_DIR / f"{name}.csv", index=False)
@@ -204,6 +223,127 @@ def run() -> None:
     logging.info("Saved train: %d | validation: %d | test: %d", len(train), len(val), len(test))
     logging.info("Targets: %s", target_cols)
     logging.info("Features: %s", feature_cols)
+
+    # Tail rows: last max_h bars that have features but no targets yet — for live inference.
+    # These are the most recent bars and are exactly what _run_feature_tail() reads.
+    max_h = max(REGRESSION_HORIZONS)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    live_tail = df.merge(tail_timestamps, on="timestamp", how="inner")
+    live_tail = live_tail.dropna(subset=feature_cols)
+    live_tail_path = FEATURES_REGRESSION_CORE_DIR / "test_live_tail.parquet"
+    live_tail.to_parquet(live_tail_path, index=False)
+    if not live_tail.empty:
+        logging.info(
+            "Saved live tail: %d rows (last %d bars without targets, up to %s)",
+            len(live_tail),
+            max_h,
+            live_tail["timestamp"].max(),
+        )
+    else:
+        logging.warning("Live tail is empty — no tail bars available")
+
+
+def run_live_tail_ctrader(n_bars: int = 120) -> None:
+    """
+    Rebuild `test_live_tail.parquet` using live bars from cTrader (the execution broker)
+    instead of the Dukascopy batch price file.
+
+    This is called after every successful Phase-A data refresh (and optionally on every
+    live tick cycle). The function:
+
+    1. Fetches the most recent `n_bars` closed 5-min bars from cTrader.
+    2. Merges them with Dukascopy history (cTrader bars override overlapping rows).
+    3. Builds core regression features on the merged tail.
+    4. Saves the feature rows for the cTrader-sourced tail to
+       ``data/features_regression_core/test_live_tail.parquet``.
+
+    Falls back gracefully with a warning if cTrader is unavailable (credentials missing,
+    timeout, etc.).  In that case the existing ``test_live_tail.parquet`` is left
+    untouched so the live tick still has something to work from.
+    """
+    _setup_logging()
+
+    try:
+        from src.download_price_ctrader import merge_ctrader_live_bars
+    except ImportError as exc:
+        logging.warning("run_live_tail_ctrader: could not import download_price_ctrader: %s", exc)
+        return
+
+    try:
+        merged_price = merge_ctrader_live_bars(n_bars=n_bars)
+    except Exception as exc:
+        logging.warning(
+            "run_live_tail_ctrader: cTrader bar fetch failed (%s) — live tail unchanged", exc
+        )
+        return
+
+    if merged_price.empty:
+        logging.warning("run_live_tail_ctrader: merged price is empty — skipping")
+        return
+
+    # We only need the tail for feature building — take last (max_h + n_bars) rows so
+    # look-back indicators (e.g. rolling 60) are computed correctly, but we don't
+    # need to re-process the full 10-year history.
+    max_h = max(REGRESSION_HORIZONS)
+    lookback = 300  # enough context for all rolling windows in build_core_price_features
+    tail_price = merged_price.tail(lookback + n_bars + max_h).copy().reset_index(drop=True)
+
+    # Ensure timestamp is tz-aware
+    tail_price["timestamp"] = pd.to_datetime(tail_price["timestamp"], utc=True)
+
+    # Build features on the tail price slice
+    feat_df = build_core_price_features(tail_price)
+
+    # Load aligned cross-asset / macro / events for the tail — reuse load_inputs but
+    # replace the price df with our merged tail.
+    try:
+        from src.build_features import load_inputs as _load_inputs
+
+        use_exog = USE_EXOGENOUS
+        _, cross, macro, events, _ = _load_inputs()
+
+        cross_feat = build_core_cross_asset_features(tail_price, cross, macro) if use_exog else tail_price[["timestamp"]].copy()
+        time_feat = build_core_time_features(tail_price)
+        macro_feat = build_core_macro_features(tail_price, events) if use_exog else build_core_macro_features(tail_price, None)
+
+        for name, feat_part in [("cross", cross_feat), ("time", time_feat), ("macro", macro_feat)]:
+            drop = [c for c in feat_part.columns if c != "timestamp"]
+            if drop:
+                right = feat_part[["timestamp"] + drop].drop_duplicates(subset=["timestamp"], keep="first")
+                before_len = len(feat_df)
+                feat_df = feat_df.merge(right, on="timestamp", how="left")
+                if len(feat_df) != before_len:
+                    feat_df = feat_df.drop_duplicates(subset=["timestamp"], keep="first")
+    except Exception as exc:
+        logging.warning("run_live_tail_ctrader: exog feature build failed (%s) — using price-only features", exc)
+
+    # Identify the cTrader tail rows (newest bars that were sourced from cTrader)
+    # We expose feature rows for the last max_h bars regardless of source, but flag
+    # source so consumers can inspect.
+    feature_cols = [c for c in feat_df.columns if c != "timestamp"]
+    live_tail = feat_df.dropna(subset=feature_cols).tail(max_h).copy()
+
+    # Attach bar_source from merged_price for provenance
+    if "bar_source" in merged_price.columns:
+        src_map = merged_price.set_index("timestamp")["bar_source"]
+        live_tail["bar_source"] = live_tail["timestamp"].map(src_map).fillna("ctrader")
+    else:
+        live_tail["bar_source"] = "ctrader"
+
+    FEATURES_REGRESSION_CORE_DIR.mkdir(parents=True, exist_ok=True)
+    live_tail_path = FEATURES_REGRESSION_CORE_DIR / "test_live_tail.parquet"
+    live_tail.to_parquet(live_tail_path, index=False)
+
+    if not live_tail.empty:
+        logging.info(
+            "run_live_tail_ctrader: saved %d rows to test_live_tail.parquet "
+            "(last bar: %s, source=%s)",
+            len(live_tail),
+            live_tail["timestamp"].max().strftime("%Y-%m-%d %H:%M UTC"),
+            live_tail.iloc[-1]["bar_source"],
+        )
+    else:
+        logging.warning("run_live_tail_ctrader: live tail is empty after feature build")
 
 
 if __name__ == "__main__":

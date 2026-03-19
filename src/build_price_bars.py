@@ -105,6 +105,11 @@ def build_clean_bars() -> pd.DataFrame:
             df = df[~invalid].reset_index(drop=True)
     logging.info("Resampled to %d clean 5min bars", len(df))
 
+    # Stamp provenance so downstream consumers know these bars came from Dukascopy.
+    # The live tail pipeline overwrites recent rows with cTrader bars (bar_source="ctrader")
+    # without touching this file — training data stays pure Dukascopy.
+    df["bar_source"] = "dukascopy"
+
     out_path = PROCESSED_PRICE_DIR / f"{SYMBOL}_{BAR_INTERVAL}_clean.csv"
     parquet_path = PROCESSED_PRICE_DIR / f"{SYMBOL}_{BAR_INTERVAL}_clean.parquet"
     df.to_csv(out_path, index=False)

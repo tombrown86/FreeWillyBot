@@ -1,0 +1,14 @@
+{
+  "classifier_v1": {
+    "position": "flat",
+    "equity": 1.0
+  },
+  "regression_v1": {
+    "position": "flat",
+    "equity": 1.0
+  },
+  "mean_reversion_v1": {
+    "position": "flat",
+    "equity": 1.0
+  }
+}

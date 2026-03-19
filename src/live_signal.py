@@ -17,18 +17,24 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.config import (
+    CLASSIFIER_MAX_BAR_AGE_MINUTES,
     COOLDOWN_BARS_AFTER_LOSS,
     CRYPTO_SKIP_WEEKEND,
     MACRO_EVENT_BLACKOUT_MIN,
     MAX_DAILY_LOSS_PCT,
     MIN_CONFIDENCE_PCT,
     NO_TRADE_THRESHOLD_PCT,
+    REGRESSION_KILL_SWITCH_N,
+    REGRESSION_KILL_SWITCH_PF,
+    REGRESSION_DD_KILL,
+    REGRESSION_PAUSE_BARS,
     SESSION_EXCLUDE_HOURS,
     SPREAD_PROXY_VOLATILITY_PCT,
     VOL_REGIME_TOP_PCT,
     SYMBOL,
     TEST_START_DATE,
 )
+from src import strategy_guards as guards
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = PROJECT_ROOT / "data" / "features"
@@ -46,6 +52,10 @@ BLOCK_REASONS = [
     "daily_loss",
     "weekend",
     "session",
+    "stale_bar",
+    "kill_switch",
+    "dd_kill",
+    "paused",
 ]
 
 
@@ -100,6 +110,61 @@ def _signal_label(pos: int) -> str:
     if pos == -1:
         return "SELL"
     return "FLAT"
+
+
+def _classifier_readiness_hint(
+    *,
+    p: int,
+    base_pos_i: int,
+    pc: float,
+    reasons: list,
+) -> tuple[int, str]:
+    """0–100 proximity to a trade; short explanation for the log table."""
+    hints: list[str] = []
+    r = 22
+    if p != 0:
+        return 100, "All gates passed — directional signal active"
+
+    if base_pos_i == 0:
+        r = int(8 + min(42, 42 * pc / max(NO_TRADE_THRESHOLD_PCT, 1e-9)))
+        hints.append(
+            f"No side: max prob {pc:.2f} (need ≥{NO_TRADE_THRESHOLD_PCT:.2f} for long/short)"
+        )
+    else:
+        r = 40
+        hints.append(f"Model has side (max prob {pc:.2f}) but a filter blocked this bar")
+
+    if "weak_confidence" in reasons:
+        gap = max(0.0, MIN_CONFIDENCE_PCT - pc)
+        hints.append(f"Confidence gate: {pc:.2f} < {MIN_CONFIDENCE_PCT:.2f} (short by {gap:.2f})")
+        r = max(r, 48 + int(min(30, pc * 45)))
+    if "vol_regime" in reasons or "spread_proxy" in reasons:
+        hints.append("Volatility / spread gate blocked")
+        r = min(r, 58)
+    if "macro_blackout" in reasons:
+        hints.append("Macro blackout window")
+        r = min(r, 52)
+    if "session" in reasons:
+        hints.append("Session filter")
+    if "weekend" in reasons:
+        hints.append("Weekend rule")
+    if "daily_loss" in reasons:
+        hints.append("Daily loss cap")
+        r = min(r, 25)
+    if "cooldown" in reasons:
+        hints.append("Post-loss cooldown")
+        r = min(r, 42)
+    if "stale_bar" in reasons:
+        hints.append("Stale bar — data too old")
+        r = min(r, 20)
+    if "kill_switch" in reasons or "paused" in reasons:
+        hints.append("Kill switch / paused")
+        r = min(r, 18)
+    if "dd_kill" in reasons:
+        hints.append("Drawdown kill")
+        r = min(r, 18)
+
+    return max(0, min(100, r)), " · ".join(hints)[:280]
 
 
 def _action_label(p: int, prev_pos: int, blocked: int) -> str:
@@ -208,6 +273,11 @@ def run(n_bars: int = 500) -> list[dict]:
     equity = 1.0
     prev_pos = 0
     entry_eq = 1.0
+    trade_rets: list[float] = []
+    n_trades = 0
+    peak_equity = 1.0
+    pause_remaining = 0
+    paused = False
 
     logging.info("Live-style signal run: last %d bars", n_bars)
     logging.info("Output format: timestamp | signal | conf | blocked | action | size | reason")
@@ -218,6 +288,15 @@ def run(n_bars: int = 500) -> list[dict]:
         p = base_pos[i]
         prev_pos_at_bar = prev_pos
         reasons = []
+
+        # Stale bar guard — must come first; if bar is old all other signals are stale too
+        bar_ts_i = timestamps.iloc[i]
+        _sb, _sr = guards.check_stale_bar(bar_ts_i, CLASSIFIER_MAX_BAR_AGE_MINUTES)
+        if _sb:
+            block_counts["stale_bar"] = block_counts.get("stale_bar", 0) + 1
+            if base_pos[i] != 0:
+                reasons.append(_sr)
+            p = 0
 
         # Static filters
         if not macro_ok[i]:
@@ -260,12 +339,44 @@ def run(n_bars: int = 500) -> list[dict]:
             reasons.append("cooldown")
             p = 0
 
+        # Pause countdown (kill switch / dd kill)
+        if paused and pause_remaining > 0:
+            pause_remaining -= 1
+            if pause_remaining <= 0:
+                paused = False
+
+        if p != 0 and paused:
+            block_counts["paused"] = block_counts.get("paused", 0) + 1
+            reasons.append("paused")
+            p = 0
+
+        # Kill switch and drawdown kill — evaluated when about to open/reverse
+        if p != 0 and p != prev_pos:
+            _ks, _ksr = guards.check_kill_switch(trade_rets, REGRESSION_KILL_SWITCH_N, REGRESSION_KILL_SWITCH_PF)
+            if _ks:
+                paused = True
+                pause_remaining = REGRESSION_PAUSE_BARS
+                block_counts["kill_switch"] = block_counts.get("kill_switch", 0) + 1
+                reasons.append("kill_switch")
+                p = 0
+            if p != 0:
+                _dd, _ddr = guards.check_drawdown_kill(peak_equity, equity, REGRESSION_DD_KILL)
+                if _dd:
+                    paused = True
+                    pause_remaining = REGRESSION_PAUSE_BARS
+                    block_counts["dd_kill"] = block_counts.get("dd_kill", 0) + 1
+                    reasons.append("dd_kill")
+                    p = 0
+
         # Cooldown trigger: did we just close a losing trade?
         if p != prev_pos:
             if prev_pos != 0:
                 trade_ret = (equity / entry_eq - 1) * prev_pos
                 if trade_ret < 0:
                     cooldown_remaining = COOLDOWN_BARS_AFTER_LOSS
+                trade_rets.append(float(trade_ret))
+                trade_rets = trade_rets[-100:]
+                n_trades += 1
             if p != 0:
                 entry_eq = equity
         if cooldown_remaining > 0:
@@ -274,6 +385,7 @@ def run(n_bars: int = 500) -> list[dict]:
         # Update equity for next bar
         if p != 0:
             equity *= 1 + p * ret[i]
+        peak_equity = max(peak_equity, equity)
         prev_pos = p
 
         reason_str = ",".join(reasons) if reasons else ""
@@ -295,6 +407,18 @@ def run(n_bars: int = 500) -> list[dict]:
         line = " | ".join(parts)
         print(line)
 
+        bar_r = float(test["return_1"].iloc[i]) if "return_1" in test.columns else 0.0
+        bar_ts = timestamps.iloc[i]
+        lag_h = (pd.Timestamp.now(tz="UTC") - bar_ts).total_seconds() / 3600.0
+        pc = float(max(P_buy[i], P_sell[i]))
+        rdy, th = _classifier_readiness_hint(
+            p=int(p),
+            base_pos_i=int(base_pos[i]),
+            pc=pc,
+            reasons=reasons,
+        )
+        if action != "NONE":
+            rdy = 100
         rows_out.append({
             "timestamp": ts_str,
             "signal": _signal_label(p),
@@ -304,6 +428,11 @@ def run(n_bars: int = 500) -> list[dict]:
             "action": action,
             "P_buy": float(P_buy[i]),
             "P_sell": float(P_sell[i]),
+            "bar_return": bar_r,
+            "signal_source": "test_csv_tail",
+            "bar_lag_hours": round(lag_h, 2),
+            "readiness_0_100": rdy,
+            "trade_hint": th,
         })
 
     # Log block reason summary

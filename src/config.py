@@ -72,18 +72,52 @@ OANDA_INSTRUMENT = "EUR_USD"  # OANDA format for EURUSD
 BINANCE_SYMBOL = "BTCUSDT"  # Binance format
 EXECUTION_TEST_UNITS = 100  # tiny size for test orders (OANDA: 100 units = 0.01 lot)
 
+# cTrader (Pepperstone demo) execution
+CTRADER_HOST_TYPE = "demo"           # "demo" or "live"
+CTRADER_EURUSD_SYMBOL_ID = 1        # cTrader symbol ID for EURUSD; confirm via ProtoOASymbolsListReq
+CTRADER_VOLUME_LOTS: float = 0.01   # minimum lot size (1 lot = 100 000 units; 0.01 = 1 000 units)
+
 # Phase 16 — Automation
 PREDICTIONS_LIVE_CSV = "data/predictions/predictions_live.csv"
 TRADE_DECISIONS_CSV = "data/logs/execution/trade_decisions.csv"
+# Livetick: if Mac sleeps/ is off, launchd misses runs. Next successful tick writes this file.
+LIVETICK_HEARTBEAT_JSON = "data/logs/execution/livetick_heartbeat.json"
+# If no fully successful tick in this many minutes, next run adds data refresh (catch up bars/features).
+LIVETICK_STALE_MINUTES: int = 45
+# Do not auto-run another data refresh sooner than this (avoids hammering if strategies fail after refresh).
+LIVETICK_AUTO_REFRESH_COOLDOWN_MINUTES: int = 25
+# Trigger an intraday data refresh when the regression feature tail is older than this many minutes.
+# Features are typically 60 min behind price (target horizon = 12 bars * 5 min) so 90 min is a
+# reasonable staleness threshold — fresh enough for intraday signals without over-refreshing.
+LIVETICK_FEATURE_STALE_MINUTES: int = 90
 
 # Phase 18 — Data quality
 MAX_BAR_RETURN_PCT = 0.05  # Flag bars with abs(return) > 5% as impossible jump
+
+# Mean reversion strategy v1 — rule-based, no ML
+MR_ZSCORE_THRESHOLD: float = 2.0   # |z| above this triggers entry
+MR_HOLD_BARS: int = 6              # bars to hold before forced close (6 bars = 30 min)
+MR_LOOKBACK_BARS: int = 50         # window for rolling mean/std of ma_20_gap
+MR_MAX_BAR_AGE_MINUTES: int = 20   # refuse to trade if bar is older than this (stale data guard)
+MR_VOL_PCT: int = 20               # trade only when vol_6 in top 20% (0 = disabled)
+MR_KILL_SWITCH_N: int = 20         # evaluate rolling PF after every 20 completed trades
+MR_KILL_SWITCH_PF: float = 0.9    # pause if rolling PF of last N trades < this
+MR_DD_KILL: float = 0.02           # pause when drawdown from equity peak exceeds 2%
+MR_PAUSE_BARS: int = 72            # resume after 72 bars (= 6 hours at 5-min bars)
+
+# Stale bar guard for classifier_v1 and regression_v1
+CLASSIFIER_MAX_BAR_AGE_MINUTES: int = 20
+REGRESSION_MAX_BAR_AGE_MINUTES: int = 20
 
 # Regression experiment (Batch 1) — multi-horizon return targets, no Chronos/TimesFM
 REGRESSION_HORIZONS = [3, 6, 12]  # bars ahead for target_ret_h
 
 # Batch 2 — Feature set: "core" (minimal) | "full" (Batch 1 classifier-style)
 FEATURE_SET = "core"
+
+# Live regression signal: use latest bar(s) from features_regression_core/test (+ model predict).
+# False = replay test_predictions.parquet from cursor (historical bar times in logs).
+REGRESSION_LIVE_USE_FEATURE_TAIL: bool = True
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Production config — regression strategy (locked after final validation)

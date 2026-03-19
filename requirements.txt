@@ -26,6 +26,8 @@ chronos-forecasting>=2.0
 # Phase 15 — Execution (demo only)
 oandapyV20>=0.7
 python-binance>=1.0
+ctrader-open-api>=0.9
+service-identity>=24.1  # Twisted TLS hostname verification (quiet get_ctrader_token warning)
 
 # Dashboard
 flask>=3.0

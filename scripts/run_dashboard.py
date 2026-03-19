@@ -109,6 +109,43 @@ def load_trade_decisions(root: Path) -> tuple[list[dict], str | None]:
     return _load_csv(path)
 
 
+def load_paper_sim_state(root: Path) -> dict | None:
+    """Per-strategy paper equity/position from live tick state file."""
+    path = root / "data" / "logs" / "execution" / "paper_sim_state.json"
+    if not path.exists():
+        return None
+    data, err = _load_json(path)
+    if err or not isinstance(data, dict):
+        return None
+    return data
+
+
+def load_livetick_heartbeat(root: Path) -> dict:
+    """Read livetick heartbeat JSON. Returns {} if missing/invalid."""
+    path = root / "data" / "logs" / "execution" / "livetick_heartbeat.json"
+    data, err = _load_json(path)
+    if err or not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _paper_strategy_ids(root: Path) -> list[str]:
+    """Strategy ids from run_live_tick.STRATEGIES so dashboard stays in sync."""
+    import importlib.util
+    path = root / "scripts" / "run_live_tick.py"
+    if not path.exists():
+        return ["classifier_v1", "regression_v1", "mean_reversion_v1"]
+    try:
+        spec = importlib.util.spec_from_file_location("run_live_tick", path)
+        if spec is None or spec.loader is None:
+            return ["classifier_v1", "regression_v1", "mean_reversion_v1"]
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return [s["id"] for s in getattr(mod, "STRATEGIES", [])]
+    except Exception:
+        return ["classifier_v1", "regression_v1", "mean_reversion_v1"]
+
+
 def load_execution_log(root: Path) -> tuple[list[dict], str | None]:
     """Latest execution_log_*.csv (most recent by name)."""
     dir_path = root / "data" / "logs" / "execution"
@@ -192,6 +229,62 @@ def load_cost_stress(root: Path) -> list[dict]:
     return rows
 
 
+def load_strategy_registry():
+    """Load strategy entries from src.strategy_registry. Returns [] on error."""
+    try:
+        from src.strategy_registry import STRATEGIES
+        return STRATEGIES
+    except Exception:
+        return []
+
+
+def load_strategy_live_stats(root: Path, pred_rows: list[dict], paper_state: dict | None) -> dict:
+    """
+    For each strategy id return a dict of live stats derived from in-memory data:
+        last_bar_ts, last_run_at, recent_signals (BUY/SELL/FLAT counts),
+        current_position, current_equity, last_bar_source
+    """
+    out: dict[str, dict] = {}
+    # Aggregate signal counts from last 50 prediction rows
+    for row in pred_rows:
+        sid = row.get("strategy_id", "")
+        if not sid:
+            continue
+        if sid not in out:
+            out[sid] = {
+                "last_bar_ts": "",
+                "last_run_at": "",
+                "signal_counts": {"BUY": 0, "SELL": 0, "FLAT": 0},
+                "current_position": "?",
+                "current_equity": None,
+                "last_bar_source": "",
+                "bar_lag_hours": "",
+            }
+        s = str(row.get("signal", "")).upper()
+        if s in out[sid]["signal_counts"]:
+            out[sid]["signal_counts"][s] += 1
+        # Most recent row wins for timestamp fields
+        out[sid]["last_bar_ts"] = row.get("timestamp", "")
+        out[sid]["last_run_at"] = row.get("run_at", "")
+        out[sid]["bar_lag_hours"] = row.get("bar_lag_hours", "")
+        out[sid]["last_bar_source"] = row.get("signal_source", "")
+
+    # Overlay equity / position from paper state
+    if paper_state and isinstance(paper_state, dict):
+        for sid, st in paper_state.items():
+            if isinstance(st, dict):
+                if sid not in out:
+                    out[sid] = {
+                        "last_bar_ts": "", "last_run_at": "",
+                        "signal_counts": {"BUY": 0, "SELL": 0, "FLAT": 0},
+                        "current_position": "?", "current_equity": None,
+                        "last_bar_source": "", "bar_lag_hours": "",
+                    }
+                out[sid]["current_position"] = st.get("position", "?")
+                out[sid]["current_equity"] = st.get("equity")
+    return out
+
+
 def load_feature_freshness(root: Path) -> list[tuple[str, str]]:
     """Key data files -> last modified time."""
     symbol, bar = "EURUSD", "5min"
@@ -259,6 +352,9 @@ def build_html(root: Path) -> str:
     reg_cfg = load_regression_production_config()
     pred_rows, pred_err = load_predictions_live(root)
     trade_rows, trade_err = load_trade_decisions(root)
+    paper_state = load_paper_sim_state(root)
+    heartbeat = load_livetick_heartbeat(root)
+    is_demo = str(heartbeat.get("demo_broker_active", "false")).lower() in ("true", "1", "yes")
     exec_rows, exec_err = load_execution_log(root)
     backtest, bt_err = load_latest_backtest(root)
     val_rows, val_err = load_validation_report(root)
@@ -271,45 +367,8 @@ def build_html(root: Path) -> str:
     wf_1m, wf_2m = load_walk_forward_results(root)
     cost_stress = load_cost_stress(root)
 
-    # ── classifier config ────────────────────────────────────────────────────
-    config_html = ""
-    if "error" in cfg:
-        config_html = f"<p>Error: {_html_escape(cfg['error'])}</p>"
-    else:
-        CLASSIFIER_LABELS = {
-            "symbol":               "Trading instrument (Forex pair)",
-            "bar_interval":         "Candle size — each bar covers this time window",
-            "no_trade_threshold":   "Skip signals with very weak predicted moves (% of ATR)",
-            "min_confidence_pct":   "Minimum model confidence required before entering a trade",
-            "max_daily_loss_pct":   "Daily loss limit — bot stops trading after hitting this drawdown",
-            "cooldown_bars":        "Number of bars to wait after a losing trade before re-entering",
-            "execution_paper_only": "When True the bot never sends real orders — simulation only",
-        }
-        config_html = "<table><thead><tr><th>Setting</th><th>Value</th><th>What it means</th></tr></thead><tbody>"
-        for k, v in cfg.items():
-            label = CLASSIFIER_LABELS.get(k, k)
-            config_html += f"<tr><td>{_html_escape(k)}</td><td><strong>{_html_escape(str(v))}</strong></td><td>{_html_escape(label)}</td></tr>"
-        config_html += "</tbody></table>"
-
-    # ── regression production config ─────────────────────────────────────────
-    LABEL_MAP = {
-        "top_pct":         ("Only trade when the prediction is in the top/bottom N% of all predictions — extreme confidence filter", "%"),
-        "vol_pct":         ("Only trade when market volatility is in the top N% — avoids quiet/flat markets", "%"),
-        "pred_threshold":  ("Ignore predictions smaller than this value — removes near-zero noise signals", ""),
-        "kill_switch_n":   ("After this many completed trades, evaluate recent performance", "trades"),
-        "kill_switch_pf":  ("If the profit factor of the last N trades drops below this, pause trading", ""),
-        "dd_kill":         ("If the account drops more than this % from its recent peak, pause trading", "fraction"),
-        "pause_bars":      ("How long to stay paused after a kill-switch fires (72 bars = 6 hours at 5-min)", "bars"),
-    }
-    if "error" in reg_cfg:
-        reg_config_html = f"<p>Error: {_html_escape(reg_cfg['error'])}</p>"
-    else:
-        reg_config_html = "<table><thead><tr><th>Parameter</th><th>Value</th><th>What it does</th></tr></thead><tbody>"
-        for k, v in reg_cfg.items():
-            label, unit = LABEL_MAP.get(k, (k, ""))
-            display = f"{v} {unit}".strip() if unit else str(v)
-            reg_config_html += f"<tr><td>{_html_escape(k)}</td><td><strong>{_html_escape(display)}</strong></td><td>{_html_escape(label)}</td></tr>"
-        reg_config_html += "</tbody></table>"
+    registry = load_strategy_registry()
+    strategy_live = load_strategy_live_stats(root, pred_rows, paper_state)
 
     # ── walk-forward summary ─────────────────────────────────────────────────
     def _wf_summary(rows: list[dict]) -> str:
@@ -332,7 +391,91 @@ def build_html(root: Path) -> str:
     wf_2m_html = _wf_summary(wf_2m) + (_render_table(wf_2m) if wf_2m else "")
     cost_stress_html = _render_table(cost_stress) if cost_stress else "<p>No data — run scripts/run_cost_stress_regression.py</p>"
 
-    # ── per-strategy signal counts ───────────────────────────────────────────
+    # ── registry-driven strategy cards ───────────────────────────────────────
+    def _render_strategy_card(entry, live: dict, mode_badge: str) -> str:
+        cfg_vals = entry.live_config()
+        # Config param table
+        param_rows = ""
+        for p in entry.params:
+            val = cfg_vals.get(p.key, "?")
+            display = f"{val} {p.unit}".strip() if p.unit else str(val)
+            param_rows += (
+                f"<tr><td><code>{_html_escape(p.key)}</code></td>"
+                f"<td><strong>{_html_escape(display)}</strong></td>"
+                f"<td>{_html_escape(p.label)}</td>"
+                f"<td class='desc'>{_html_escape(p.description)}</td></tr>"
+            )
+        param_table = (
+            "<table class='param-table'><thead><tr>"
+            "<th>Config key</th><th>Value</th><th>Name</th><th>What it does</th>"
+            "</tr></thead><tbody>" + param_rows + "</tbody></table>"
+            if param_rows else "<p class='desc'>No parameters defined.</p>"
+        )
+
+        # Live stats bar
+        stats = live.get(entry.id, {})
+        counts = stats.get("signal_counts", {})
+        buy_n  = counts.get("BUY", 0)
+        sell_n = counts.get("SELL", 0)
+        flat_n = counts.get("FLAT", 0)
+        total  = buy_n + sell_n + flat_n
+        last_bar   = _html_escape(str(stats.get("last_bar_ts", "—")))
+        last_run   = _html_escape(str(stats.get("last_run_at", "—")))
+        lag        = stats.get("bar_lag_hours", "")
+        lag_html   = f" <span class='lag {'lag-warn' if lag and float(lag) > 0.5 else 'lag-ok'}'>(lag {lag}h)</span>" if lag else ""
+        pos        = _html_escape(str(stats.get("current_position", "?")))
+        eq         = stats.get("current_equity")
+        eq_html    = f"{float(eq):.6f}" if eq is not None else "—"
+        src        = _html_escape(str(stats.get("last_bar_source", "—")))
+        locked_badge = '<span class="badge badge-locked">LOCKED CONFIG</span>' if entry.config_locked else ""
+        active_badge = '<span class="badge badge-active">ACTIVE</span>' if entry.active else '<span class="badge badge-future">INACTIVE</span>'
+
+        stats_html = (
+            f"<div class='stat-bar'>"
+            f"<span>Last bar: <strong>{last_bar}</strong>{lag_html}</span>"
+            f" &nbsp;·&nbsp; <span>Last run: <strong>{last_run}</strong></span>"
+            f" &nbsp;·&nbsp; <span>Position: <strong>{pos}</strong></span>"
+            f" &nbsp;·&nbsp; <span>Equity: <strong>{eq_html}</strong></span>"
+            f" &nbsp;·&nbsp; <span>Source: <code>{src}</code></span>"
+            f" &nbsp;·&nbsp; <span class='sig-dist'>BUY <strong>{buy_n}</strong> · SELL <strong>{sell_n}</strong> · FLAT <strong>{flat_n}</strong>"
+            + (f" <span class='desc'>(last {total})</span>" if total else "")
+            + "</span></div>"
+        )
+
+        return f"""<details class="strategy-card">
+<summary>
+  <span class="strat-name">{_html_escape(entry.name)}</span>
+  {active_badge} {locked_badge}
+  <span class="badge badge-technique">{_html_escape(entry.technique)}</span>
+  {mode_badge}
+</summary>
+<div class="strat-body">
+  {stats_html}
+  <div class="strat-desc">
+    <p>{entry.plain_description}</p>
+  </div>
+  <details class="inner-details">
+    <summary>Technical detail</summary>
+    <div class="inner-body">
+      <p class="mono-desc">{entry.technical_description}</p>
+      <p class="desc"><strong>Best conditions:</strong> {_html_escape(entry.best_conditions)}</p>
+      <p class="desc"><strong>Known weaknesses:</strong> {_html_escape(entry.known_weaknesses)}</p>
+    </div>
+  </details>
+  <details class="inner-details" open>
+    <summary>Live parameters (from config.py)</summary>
+    <div class="inner-body">{param_table}</div>
+  </details>
+</div>
+</details>"""
+
+    mode_badge = f'<span class="badge {"badge-demo" if is_demo else "badge-sim"}">{"DEMO" if is_demo else "SIMULATION"}</span>'
+    strategies_html = "\n".join(
+        _render_strategy_card(entry, strategy_live, mode_badge)
+        for entry in registry
+    ) if registry else "<p>Could not load strategy registry.</p>"
+
+    # ── per-strategy signal counts (for signal log header) ────────────────────
     strategy_ids = sorted({r.get("strategy_id", "unknown") for r in pred_rows})
     sig_parts = []
     for sid in (strategy_ids or []):
@@ -346,12 +489,97 @@ def build_html(root: Path) -> str:
     signal_dist = " &nbsp;&nbsp;&nbsp; ".join(sig_parts) if sig_parts else "No signals yet — run scripts/run_live_tick.py"
 
     # ── simulated trade decisions (split from future real trades) ────────────
-    sim_trade_rows = [r for r in trade_rows if str(r.get("strategy_id", "")).endswith("_v1") or r.get("mode", "sim") != "live"]
-    real_trade_rows = [r for r in trade_rows if r.get("mode", "") == "live"]
+    paper_trade_rows = [r for r in trade_rows if r.get("mode", "sim") == "sim"]
+    demo_trade_rows  = [r for r in trade_rows if r.get("mode") == "demo"]
+    real_trade_rows  = [r for r in trade_rows if r.get("mode") == "live"]
 
-    sim_trade_html = trade_err if trade_err else (
-        _render_table(sim_trade_rows) if sim_trade_rows else
-        "<p>No simulated trades yet — they will appear here once the live tick runs and a strategy fires a BUY/SELL signal.</p>"
+    def _paper_equity_summary(state: dict | None, rows: list[dict], root: Path) -> str:
+        lines = [
+            "<table><thead><tr><th>Strategy</th><th>Simulated equity</th><th>Return vs 1.0</th><th>Position</th></tr></thead><tbody>"
+        ]
+        # Show all strategies from run_live_tick so new strategies appear even before first tick
+        strategy_ids = _paper_strategy_ids(root)
+        if state and isinstance(state, dict):
+            for sid in sorted(strategy_ids):
+                st = state.get(sid) or {}
+                if not isinstance(st, dict):
+                    st = {"position": "flat", "equity": 1.0}
+                try:
+                    eq = float(st.get("equity", 1.0))
+                    pct = (eq - 1.0) * 100
+                    pos = str(st.get("position", "flat"))
+                except (TypeError, ValueError):
+                    eq, pct, pos = 1.0, 0.0, "?"
+                lines.append(
+                    f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+                    f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
+                )
+            lines.append("</tbody></table>")
+            return "".join(lines)
+        if trade_err:
+            return ""
+        strategy_ids = _paper_strategy_ids(root)
+        if not any("sim_equity" in r for r in rows):
+            # No state file and no sim_equity in CSV: show all strategies with defaults
+            for sid in sorted(strategy_ids):
+                lines.append(
+                    f"<tr><td>{_html_escape(sid)}</td><td>1.000000</td>"
+                    "<td>+0.0000%</td><td>flat</td></tr>"
+                )
+            lines.append("</tbody></table>")
+            return "".join(lines) + (
+                "<p class=\"desc\">Run <code>python scripts/run_live_tick.py</code> once to create "
+                "<code>paper_sim_state.json</code>.</p>"
+            )
+        last: dict[str, dict] = {}
+        for r in reversed(rows):
+            sid = r.get("strategy_id") or ""
+            if sid and sid not in last:
+                last[sid] = r
+        for sid in sorted(strategy_ids):
+            r = last.get(sid)
+            if not r:
+                lines.append(
+                    f"<tr><td>{_html_escape(sid)}</td><td>1.000000</td>"
+                    "<td>+0.0000%</td><td>flat</td></tr>"
+                )
+                continue
+            try:
+                eq = float(r.get("sim_equity", 1))
+                pct = (eq - 1.0) * 100
+                pos = r.get("sim_position_after", "")
+            except (TypeError, ValueError):
+                eq, pct, pos = 1.0, 0.0, "?"
+            lines.append(
+                f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+                f"<td>{pct:+.4f}%</td><td>{_html_escape(str(pos))}</td></tr>"
+            )
+        lines.append("</tbody></table>")
+        return "".join(lines)
+
+    paper_equity_html = _paper_equity_summary(paper_state, trade_rows, root)
+
+    def _is_order_row(r: dict) -> bool:
+        at = str(r.get("action_taken", "")).strip().upper()
+        return bool(at) and at != "NONE"
+
+    def _orders_html(rows: list[dict], empty_msg: str) -> str:
+        order_rows = [r for r in rows if _is_order_row(r)]
+        if trade_err:
+            return trade_err
+        return (
+            _render_table(order_rows[-100:])
+            if order_rows
+            else f"<p>{empty_msg}</p>"
+        )
+
+    paper_orders_html = _orders_html(
+        paper_trade_rows,
+        "No paper orders yet — strategies stay flat on most bars; open/close/reverse rows appear here when filters pass.",
+    )
+    demo_orders_html = _orders_html(
+        demo_trade_rows,
+        "No demo broker orders yet — orders will appear here when the next tick places or changes a position.",
     )
     real_trade_html = (
         _render_table(real_trade_rows) if real_trade_rows else
@@ -383,6 +611,55 @@ def build_html(root: Path) -> str:
         "<p>No signals yet — run <code>python scripts/run_live_tick.py</code> to generate the first bar.</p>"
     )
 
+    # ── collapsible execution blocks ─────────────────────────────────────────
+    _paper_open = "" if is_demo else " open"
+    _demo_open  = " open" if is_demo else ""
+
+    paper_block_html = f"""<details{_paper_open}>
+<summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — current equity and orders (latest 100)</summary>
+<section>
+<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>
+<p class="desc">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged.
+While long or short, each 5-minute bar applies that bar's return.
+Opens/closes follow the model's <strong>action</strong>; state is saved between ticks so position carries forward.
+Reset by deleting <code>data/logs/execution/paper_sim_state.json</code> (and optionally the CSVs).</p>
+{"" if is_demo else paper_equity_html}
+{"<p class=\"desc\">Equity is tracked under the Demo broker section when demo mode is active.</p>" if is_demo else ""}
+<h3>Orders <span class="badge badge-sim">SIMULATION</span></h3>
+<p class="desc">Only bars where the bot would have placed or changed a position (no <code>NONE</code> rows).
+Full per-tick history is in the Signal log above.</p>
+{paper_orders_html}
+</section>
+</details>"""
+
+    demo_block_html = f"""<details{_demo_open}>
+<summary><strong>Demo broker</strong> <span class="badge badge-demo">DEMO</span> — current equity and orders (latest 100)</summary>
+<section>
+<h3>Current equity <span class="badge badge-demo">DEMO</span></h3>
+<p class="desc">Orders are sent to the configured demo account (cTrader/OANDA/Binance); no real money.
+Position is read from the broker; equity is tracked locally starting at 1.0.
+State is saved in <code>paper_sim_state.json</code> (shared with paper sim).</p>
+{paper_equity_html if is_demo else "<p class=\"desc\">Equity is tracked under the Paper simulation section when paper mode is active.</p>"}
+<h3>Orders <span class="badge badge-demo">DEMO</span></h3>
+<p class="desc">Orders placed or changed on the demo broker account. <code>NONE</code> rows are suppressed.</p>
+{demo_orders_html}
+</section>
+</details>"""
+
+    real_trades_block_html = f"""<details>
+<summary><strong>Real trades</strong> <span class="badge badge-live">LIVE</span> <span class="badge badge-future">NOT YET ENABLED</span></summary>
+<section>
+<p class="desc">Real trades will be recorded here once <code>execution_paper_only = False</code> is set in config and
+the system is connected to a live broker. Until then this section will always be empty.</p>
+<h3>Executed orders</h3>
+{real_trade_html}
+<h3>Broker execution log — latest 50</h3>
+<p class="desc">Low-level log from the execution module showing each order attempt, broker status codes,
+fill prices, and any errors. Useful for diagnosing connectivity or slippage issues when live trading.</p>
+{exec_html}
+</section>
+</details>"""
+
     pipeline_html = "<table><thead><tr><th>Log file</th><th>Last modified</th></tr></thead><tbody>"
     for name, mtime in pipeline:
         pipeline_html += f"<tr><td>{_html_escape(name)}</td><td>{_html_escape(mtime)}</td></tr>"
@@ -398,6 +675,7 @@ def build_html(root: Path) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
 <title>FreeWillyBot dashboard</title>
 <style>
 body {{ font-family: system-ui, sans-serif; margin: 1rem 2rem; background: #1a1a1a; color: #e0e0e0; }}
@@ -421,85 +699,80 @@ code {{ background: #2a2a2a; padding: 0.1rem 0.35rem; border-radius: 3px; font-s
           letter-spacing: 0.04em; margin-left: 0.4rem; }}
 .badge-locked  {{ background: #1a4a1a; border: 1px solid #3a8a3a; color: #7dca7d; }}
 .badge-sim     {{ background: #1a2a4a; border: 1px solid #3a5a9a; color: #7aacda; }}
+.badge-demo    {{ background: #2a1a4a; border: 1px solid #6a3a9a; color: #b07ada; }}
 .badge-live    {{ background: #4a1a1a; border: 1px solid #9a3a3a; color: #da7a7a; }}
 .badge-future  {{ background: #333;    border: 1px solid #666;    color: #999; }}
 .section-group {{ border-left: 3px solid #333; padding-left: 1rem; margin-bottom: 2rem; }}
+details {{ margin-bottom: 1.5rem; border: 1px solid #333; border-radius: 4px; }}
+details > summary {{
+    padding: 0.6rem 0.9rem; cursor: pointer; font-size: 0.95rem;
+    background: #222; border-radius: 4px; list-style: none; user-select: none;
+}}
+details > summary::-webkit-details-marker {{ display: none; }}
+details > summary::before {{ content: "▶ "; font-size: 0.75rem; opacity: 0.6; }}
+details[open] > summary::before {{ content: "▼ "; }}
+details > summary:hover {{ background: #2a2a2a; }}
+details[open] > summary {{ border-bottom: 1px solid #333; border-radius: 4px 4px 0 0; }}
+details > section, details > .details-body {{ padding: 0.75rem 1rem; }}
+.badge-active   {{ background: #1a3a1a; border: 1px solid #3a7a3a; color: #7aca7a; }}
+.badge-technique {{ background: #2a2a1a; border: 1px solid #7a7a3a; color: #caca7a; font-weight: normal; }}
+.strategy-card > summary {{ display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }}
+.strat-name {{ font-weight: bold; font-size: 0.95rem; margin-right: 0.3rem; }}
+.strat-body {{ padding: 0.75rem 1rem; }}
+.strat-desc {{ margin: 0.5rem 0 0.75rem 0; font-size: 0.9rem; line-height: 1.6; border-left: 3px solid #444; padding-left: 0.75rem; }}
+.stat-bar {{ font-size: 0.82rem; font-family: ui-monospace, monospace; background: #1e1e1e; border: 1px solid #333; border-radius: 3px; padding: 0.4rem 0.7rem; margin-bottom: 0.75rem; flex-wrap: wrap; display: flex; gap: 0.1rem 0; line-height: 1.8; }}
+.sig-dist {{ color: #8af; }}
+.lag-warn {{ color: #f88; font-size: 0.78rem; }}
+.lag-ok   {{ color: #8c8; font-size: 0.78rem; }}
+.mono-desc {{ font-family: ui-monospace, monospace; font-size: 0.8rem; line-height: 1.7; color: #ccc; }}
+.param-table {{ font-size: 0.8rem; }}
+.param-table td:nth-child(2) {{ white-space: nowrap; }}
+.inner-details {{ margin: 0.6rem 0; border: 1px solid #2a2a2a; border-radius: 3px; }}
+.inner-details > summary {{ padding: 0.4rem 0.7rem; cursor: pointer; background: #1e1e1e; font-size: 0.85rem; color: #aaa; list-style: none; }}
+.inner-details > summary::-webkit-details-marker {{ display: none; }}
+.inner-details > summary::before {{ content: "▶ "; font-size: 0.7rem; opacity: 0.5; }}
+.inner-details[open] > summary::before {{ content: "▼ "; }}
+.inner-body {{ padding: 0.5rem 0.75rem; }}
+.logo-header {{ text-align: center; margin-bottom: 0.5rem; }}
+.dashboard-logo {{ max-width: 200px; height: auto; display: block; margin: 0 auto; }}
 </style>
 </head>
 <body>
+<div class="logo-header">
+  <img src="/static/logo.png" alt="Free Willy" class="dashboard-logo">
+</div>
 <h1>FreeWillyBot — trading dashboard</h1>
-<p class="desc">All strategies are currently running in <strong>simulation mode</strong> — no real money is at risk.
-Signals are generated every 5 minutes when <code>run_live_tick.py</code> runs.
-Real-trade sections are shown below but will remain empty until live execution is enabled.</p>
+<p class="desc">{"<strong>Demo broker mode</strong> — orders are sent to the configured demo account (cTrader/OANDA/Binance); no real money at risk." if is_demo else "All strategies are currently running in <strong>simulation mode</strong> — no real money is at risk."}
+Signals are generated every 2 minutes when <code>run_live_tick.py</code> runs.
+{"" if is_demo else "Real-trade sections are shown below but will remain empty until live execution is enabled."}
+<small style="opacity:0.5">(page auto-refreshes every 60 s)</small></p>
 
 <!-- ═══════════════════════════════════════════════════════ STRATEGIES -->
 <h2>Strategies</h2>
-<p class="desc">The bot currently has one validated strategy. More will be added over time for comparison.
-Each strategy runs independently and logs its signals tagged with a <em>strategy_id</em>.</p>
+<p class="desc">{len(registry)} strategies registered · {sum(1 for s in registry if s.active)} active.
+Each strategy runs independently on every tick; signals are tagged with a <em>strategy_id</em>.
+Expand a card to see its technique, live parameters, and last-tick stats.</p>
+{strategies_html}
 
-<div class="section-group">
-<section>
-<h3>Regression strategy (regression_v1) <span class="badge badge-locked">LOCKED CONFIG</span> <span class="badge badge-sim">SIMULATION</span></h3>
-<p class="desc">A machine-learning regression model trained on 5-minute EURUSD bars.
-It predicts the return 6 bars (30 min) ahead and only trades when the signal is in the extreme top or bottom
-of all predictions — so most bars produce no signal.
-Two risk controls (kill switch + drawdown limit) pause the strategy during bad patches and resume automatically.
-The parameters below were finalised after out-of-sample validation on Jan–Dec 2024 and must not be changed without a new validation run.</p>
-{reg_config_html}
-</section>
-
-<section>
-<h3>Classifier strategy (classifier_v1) <span class="badge badge-sim">SIMULATION</span></h3>
-<p class="desc">A binary classification model that outputs a BUY or SELL probability for each bar.
-Signals are filtered by minimum confidence, volatility regime, session hours, and a daily loss limit.
-Config parameters below control those filters.</p>
-{config_html}
-</section>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════ PAPER TRADING -->
-<h2>Paper trading <span class="badge badge-sim">SIMULATION</span></h2>
-<p class="desc">Every time the live tick runs, each strategy evaluates the latest bar and records what it <em>would</em> do.
-Nothing is sent to a broker — this is purely to track signal quality and build a track record before going live.</p>
+<!-- ═══════════════════════════════════════════════════════ EXECUTION -->
+<h2>{"Demo broker" if is_demo else "Paper trading"} <span class="badge {"badge-demo" if is_demo else "badge-sim"}">{"DEMO" if is_demo else "SIMULATION"}</span></h2>
+<p class="desc">Every time the live tick runs, each strategy evaluates the latest bar and records what it <em>would</em> do{"." if not is_demo else ", and sends an order to the demo broker account."}</p>
 
 <section>
 <h3>Signal log — latest 50 bars</h3>
-<p class="desc">One row per strategy per tick. <strong>signal</strong>: BUY / SELL / FLAT (the raw model output).
-<strong>action</strong>: what the strategy decided to do with its position (OPEN_LONG, OPEN_SHORT, CLOSE, NONE).
-<strong>blocked</strong>: 1 if a risk filter stopped the trade. <strong>reason</strong>: which filter fired.
-<strong>pred</strong>: the raw model prediction value. <strong>confidence</strong>: absolute prediction magnitude.</p>
+<p class="desc">One row per strategy per tick. <strong>timestamp</strong> is the <em>bar close time</em> in the data (not necessarily &quot;now&quot;).
+<strong>bar_lag_hours</strong> = hours between that bar and when the tick ran (large = stale features — run data refresh).
+<strong>signal_source</strong>: <code>test_csv_tail</code> = classifier last bar; <code>regression_features_tail</code> = regression last bar + live model prediction; <code>replay_predictions</code> only if <code>REGRESSION_LIVE_USE_FEATURE_TAIL = False</code> in config.
+<strong>run_at</strong> = wall-clock UTC when the job ran.
+<strong>readiness_0_100</strong> = rough how close to a trade (100 = this bar fired an open/close/reverse).
+<strong>trade_hint</strong> = plain-English: what is missing (confidence, vol, extreme pred, risk pause, etc.).</p>
 <p class="signal-dist">{signal_dist}</p>
 {pred_html}
 </section>
 
-<section>
-<h3>Simulated trade decisions <span class="badge badge-sim">SIMULATION</span></h3>
-<p class="desc">Records the trade action each strategy <em>would have executed</em> on a real broker.
-These are generated when the tick script runs with <code>--execute</code>.
-Columns: <strong>strategy_id</strong> — which strategy fired.
-<strong>signal</strong> — BUY/SELL/FLAT from the model.
-<strong>action_taken</strong> — the order action (e.g. OPEN_LONG).
-<strong>broker_response</strong> — simulated broker reply (dry run).</p>
-{sim_trade_html}
-</section>
-
-<!-- ═══════════════════════════════════════════════════════ REAL TRADES (future) -->
-<h2>Real trades <span class="badge badge-live">LIVE</span> <span class="badge badge-future">NOT YET ENABLED</span></h2>
-<p class="desc">Real trades will be recorded here once <code>execution_paper_only = False</code> is set in config and
-the system is connected to a live broker. Until then this section will always be empty.
-The table structure will be identical to simulated trades so they can be compared side by side.</p>
-
-<section>
-<h3>Executed orders</h3>
-{real_trade_html}
-</section>
-
-<section>
-<h3>Broker execution log — latest 50</h3>
-<p class="desc">Low-level log from the execution module showing each order attempt, broker status codes,
-fill prices, and any errors. Useful for diagnosing connectivity or slippage issues when live trading.</p>
-{exec_html}
-</section>
+{demo_block_html}
+{paper_block_html}
+{real_trades_block_html}
 
 <!-- ═══════════════════════════════════════════════════════ BACKTEST VALIDATION -->
 <h2>Backtest &amp; validation</h2>
@@ -599,7 +872,11 @@ def main() -> None:
             "Or: ./scripts/run_dashboard.sh"
         )
 
-    app = Flask(__name__)
+    app = Flask(
+        __name__,
+        static_folder=str(PROJECT_ROOT / "static"),
+        static_url_path="/static",
+    )
 
     @app.route("/")
     def index() -> str:
