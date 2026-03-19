@@ -103,6 +103,8 @@ docker compose --profile dashboard up -d
 
 **Logs:** `docker compose logs -f bot`
 
+**Cron (native Linux, same as Mac):** To run the same schedule with cron on the host (e.g. at `/home/tom/dev/FreeWillyBot`) instead of Docker, see **[docs/CRON_LINUX.md](docs/CRON_LINUX.md)**. Use `./scripts/install_cron.sh` to install the crontab.
+
 ---
 
 ## Project layout (high level)
