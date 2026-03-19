@@ -614,6 +614,8 @@ def build_html(root: Path) -> str:
     # ── collapsible execution blocks ─────────────────────────────────────────
     _paper_open = "" if is_demo else " open"
     _demo_open  = " open" if is_demo else ""
+    _equity_note_demo = '<p class="desc">Equity is tracked under the Demo broker section when demo mode is active.</p>'
+    _equity_note_paper = '<p class="desc">Equity is tracked under the Paper simulation section when paper mode is active.</p>'
 
     paper_block_html = f"""<details{_paper_open}>
 <summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — current equity and orders (latest 100)</summary>
@@ -624,7 +626,7 @@ While long or short, each 5-minute bar applies that bar's return.
 Opens/closes follow the model's <strong>action</strong>; state is saved between ticks so position carries forward.
 Reset by deleting <code>data/logs/execution/paper_sim_state.json</code> (and optionally the CSVs).</p>
 {"" if is_demo else paper_equity_html}
-{"<p class=\"desc\">Equity is tracked under the Demo broker section when demo mode is active.</p>" if is_demo else ""}
+{_equity_note_demo if is_demo else ""}
 <h3>Orders <span class="badge badge-sim">SIMULATION</span></h3>
 <p class="desc">Only bars where the bot would have placed or changed a position (no <code>NONE</code> rows).
 Full per-tick history is in the Signal log above.</p>
@@ -639,7 +641,7 @@ Full per-tick history is in the Signal log above.</p>
 <p class="desc">Orders are sent to the configured demo account (cTrader/OANDA/Binance); no real money.
 Position is read from the broker; equity is tracked locally starting at 1.0.
 State is saved in <code>paper_sim_state.json</code> (shared with paper sim).</p>
-{paper_equity_html if is_demo else "<p class=\"desc\">Equity is tracked under the Paper simulation section when paper mode is active.</p>"}
+{paper_equity_html if is_demo else _equity_note_paper}
 <h3>Orders <span class="badge badge-demo">DEMO</span></h3>
 <p class="desc">Orders placed or changed on the demo broker account. <code>NONE</code> rows are suppressed.</p>
 {demo_orders_html}
