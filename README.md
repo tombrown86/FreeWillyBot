@@ -8,9 +8,9 @@ Live trading system as well as research and paper-trading stack, currently for *
 
 ### Dashboard
 
-| Strategies & signal log | Demo broker & backtest |
+| Strategies & signal log | Backtest & validation |
 |------------------------|------------------------|
-| ![Dashboard overview](assets/dashboard-overview.png) | ![Dashboard backtest](assets/dashboard-backtest.png) |
+| ![Dashboard overview](assets/dashboard-overview.png) | ![Dashboard backtest and validation](assets/dashboard-backtest.png) |
 
 ---
 

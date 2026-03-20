@@ -337,6 +337,70 @@ def _render_table(rows: list[dict], keys: list[str] | None = None) -> str:
     return "\n".join(lines)
 
 
+def _wf_format_cell(key: str, value: object) -> str:
+    """Format walk-forward CSV cells: net_return and max_dd as %, profit_factor rounded."""
+    if value is None or value == "":
+        return "—"
+    try:
+        if key == "net_return":
+            return f"{float(value):.2%}"
+        if key == "max_dd":
+            return f"{float(value):.2%}"
+        if key == "profit_factor":
+            return f"{float(value):.2f}"
+        if key == "n_trades":
+            return str(int(float(value)))
+    except (ValueError, TypeError):
+        pass
+    return str(value)
+
+
+def _render_walk_forward_table(rows: list[dict]) -> str:
+    """Walk-forward table with human-readable percentages and stable column order."""
+    if not rows:
+        return "<p>No rows</p>"
+    keys = list(rows[0].keys())
+    preferred = ["window_start", "window_months", "net_return", "profit_factor", "max_dd", "n_trades"]
+    keys = [k for k in preferred if k in keys] + [k for k in keys if k not in preferred]
+    lines = [
+        "<table class='wf-table'><thead><tr>",
+        "".join(f"<th>{_html_escape(k)}</th>" for k in keys),
+        "</tr></thead><tbody>",
+    ]
+    for row in rows:
+        lines.append("<tr>")
+        for k in keys:
+            raw = row.get(k, "")
+            lines.append(
+                f"<td title='{_html_escape(str(raw))}'>{_html_escape(_wf_format_cell(k, raw))}</td>"
+            )
+        lines.append("</tr>")
+    lines.append("</tbody></table>")
+    return "\n".join(lines)
+
+
+def _walk_forward_summary_html(rows: list[dict]) -> str:
+    """Stats for walk-forward windows; explains sum vs full-period headline."""
+    if not rows:
+        return "<p>No data</p>"
+    try:
+        nets = [float(r["net_return"]) for r in rows]
+    except (KeyError, ValueError, TypeError):
+        return "<p>Could not parse walk-forward rows</p>"
+    n_pos = sum(1 for n in nets if n > 0)
+    worst = min(nets)
+    best = max(nets)
+    total = sum(nets)
+    mean = total / len(nets)
+    return f"""<div class="wf-summary">
+<p><strong>{n_pos}/{len(nets)} windows positive</strong> (after costs, each window independent)</p>
+<ul>
+<li><strong>Sum of window returns</strong>: {total:.2%} — arithmetic sum of per-window returns; <em>not</em> the same as compound full-period ROE on one continuous run.</li>
+<li><strong>Mean per window</strong>: {mean:.2%} · <strong>Best</strong>: {best:.2%} · <strong>Worst</strong>: {worst:.2%}</li>
+</ul>
+</div>"""
+
+
 def _render_json_block(obj: dict | list) -> str:
     """Render JSON as preformatted block."""
     try:
@@ -370,25 +434,29 @@ def build_html(root: Path) -> str:
     registry = load_strategy_registry()
     strategy_live = load_strategy_live_stats(root, pred_rows, paper_state)
 
-    # ── walk-forward summary ─────────────────────────────────────────────────
-    def _wf_summary(rows: list[dict]) -> str:
-        if not rows:
-            return "<p>No data</p>"
-        try:
-            nets = [float(r["net_return"]) for r in rows]
-            n_pos = sum(1 for n in nets if n > 0)
-            worst = min(nets)
-            total = sum(nets)
-            return (
-                f"<p><strong>{n_pos}/{len(nets)} windows positive</strong> &nbsp;|&nbsp; "
-                f"Net sum: {total:.4f} &nbsp;|&nbsp; "
-                f"Worst window: {worst:.4f}</p>"
-            )
-        except Exception:
-            return ""
+    # ── walk-forward (regression_v1) ───────────────────────────────────────────
+    wf_intro_html = """<details class="inner-details wf-details">
+<summary>How to read walk-forward vs full-period validation</summary>
+<div class="inner-body wf-note">
+<p><strong>Why the numbers here can look worse than the ~3–6% style headline in <code>src/config.py</code>:</strong></p>
+<ul>
+<li>The <strong>production comment</strong> in config is a <strong>single continuous out-of-sample backtest</strong> (e.g. Jan–Dec 2024) with the locked regression rules — one equity curve, one net return (e.g. ~+5.4% in that validation run).</li>
+<li>This table is <strong>rolling independent windows</strong>: each row is its own mini test period. <strong>Summing</strong> monthly <code>net_return</code> values is <em>not</em> the same metric as that full-period number (different compounding, different trade sets, and a bad month drags the sum without invalidating the full-year story).</li>
+<li><strong>Net sum</strong> here answers: &quot;If I add up each window’s return as reported, what do I get?&quot; It can be slightly negative while several windows are strongly positive — check <strong>mean</strong>, <strong>best/worst</strong>, and the per-window table.</li>
+</ul>
+<p class="desc">Hover a table cell to see the raw float stored in the CSV. Regenerate files with <code>scripts/run_walk_forward_regression.py</code> after changing strategy code.</p>
+</div>
+</details>"""
 
-    wf_1m_html = _wf_summary(wf_1m) + (_render_table(wf_1m) if wf_1m else "")
-    wf_2m_html = _wf_summary(wf_2m) + (_render_table(wf_2m) if wf_2m else "")
+    wf_block_html = (
+        wf_intro_html
+        + "<h4>12 × 1-month windows</h4>"
+        + _walk_forward_summary_html(wf_1m)
+        + (_render_walk_forward_table(wf_1m) if wf_1m else "<p>No data — run scripts/run_walk_forward_regression.py</p>")
+        + "<h4>6 × 2-month windows</h4>"
+        + _walk_forward_summary_html(wf_2m)
+        + (_render_walk_forward_table(wf_2m) if wf_2m else "<p>No data — run scripts/run_walk_forward_regression.py</p>")
+    )
     cost_stress_html = _render_table(cost_stress) if cost_stress else "<p>No data — run scripts/run_cost_stress_regression.py</p>"
 
     # ── registry-driven strategy cards ───────────────────────────────────────
@@ -695,6 +763,13 @@ pre {{ background: #222; padding: 0.75rem; overflow-x: auto; font-size: 0.8rem; 
 p {{ margin: 0.4rem 0; font-size: 0.9rem; }}
 code {{ background: #2a2a2a; padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.82rem; }}
 .desc {{ color: #999; font-size: 0.83rem; margin: 0.2rem 0 0.6rem 0; line-height: 1.5; }}
+.wf-note {{ border-left: 3px solid #4a6a8a; padding: 0.5rem 0.75rem; margin: 0.5rem 0 0.75rem 0; background: #1a1f24; font-size: 0.83rem; color: #ccc; line-height: 1.55; }}
+.wf-note ul {{ margin: 0.35rem 0 0.35rem 1.1rem; }}
+.wf-summary {{ margin: 0.35rem 0 0.75rem 0; font-size: 0.85rem; color: #ddd; }}
+.wf-summary ul {{ margin: 0.25rem 0 0.35rem 1.1rem; padding: 0; }}
+.wf-summary li {{ margin: 0.2rem 0; }}
+.wf-table td {{ font-variant-numeric: tabular-nums; }}
+.wf-details {{ margin-bottom: 1rem; }}
 .signal-dist {{ font-family: ui-monospace; color: #8af; margin: 0.3rem 0 0.6rem 0; font-size: 0.85rem; }}
 .badge {{ display: inline-block; padding: 0.15rem 0.55rem; border-radius: 3px;
           font-size: 0.72rem; font-weight: bold; vertical-align: middle;
@@ -783,13 +858,9 @@ These are fixed — they don't update unless you re-run the validation scripts.<
 
 <section>
 <h3>Walk-forward validation (regression_v1)</h3>
-<p class="desc">The strategy was tested on rolling time windows it never trained on — the most honest way to measure robustness.
-Each row is one independent test window. <strong>net_return</strong> is the return after costs.
-A high fraction of positive windows means the edge is consistent across time, not just a lucky period.</p>
-<h4>12 × 1-month windows</h4>
-{wf_1m_html}
-<h4>6 × 2-month windows</h4>
-{wf_2m_html}
+<p class="desc">Rolling windows the model never trained on — good for checking whether an edge holds across time.
+Each row is one window; <strong>net_return</strong> is after costs for that window only. Use the expandable note below to compare this to the full-period headline in <code>config.py</code>.</p>
+{wf_block_html}
 </section>
 
 <section>

@@ -104,3 +104,105 @@ Same paths as on the Mac:
 - `data/logs/retrain_stdout.log`, `retrain_stderr.log`
 
 Tail livetick: `tail -f /home/tom/dev/FreeWillyBot/data/logs/livetick_stdout.log`
+
+---
+
+## 6. No signals on the Linux copy
+
+If the Signal log stays empty on the Linux machine, work through these checks.
+
+### 6.1 Confirm cron is running
+
+```bash
+crontab -l   # should show the FreeWillyBot livetick line
+ls -la /home/tom/dev/FreeWillyBot/data/logs/livetick_*.log   # files should exist and grow every ~2 min
+tail -20 /home/tom/dev/FreeWillyBot/data/logs/livetick_stderr.log   # any Python errors?
+tail -20 /home/tom/dev/FreeWillyBot/data/logs/livetick_stdout.log   # any "[classifier_v1] signal=..." lines?
+```
+
+If the log files are missing or never updated, cron may not be running the job (wrong user, wrong path in crontab, or cron daemon not running).
+
+### 6.2 Run livetick once by hand
+
+This shows errors that cron would hide:
+
+```bash
+cd /home/tom/dev/FreeWillyBot
+.venv/bin/python -m scripts.run_live_tick
+```
+
+Watch for:
+
+- **FileNotFoundError** (e.g. `meta_model.pkl`, `test.csv`, `regression_best.pkl`) → data or models are missing on this machine.
+- **"No signal produced"** or **"[regression_v1] No features_regression_core test file"** → data pipeline hasn’t been run here.
+
+### 6.3 Data and models on the Linux box
+
+The Linux copy needs its own data and models; a plain `git pull` does not create `data/processed`, `data/features`, or `data/models`. If you never ran refresh/train on this machine, strategies will fail or return no rows.
+
+**One-time setup on the Linux machine:**
+
+```bash
+cd /home/tom/dev/FreeWillyBot
+.venv/bin/python -m scripts.run_daily_data_refresh --skip-if-recent 20
+.venv/bin/python -m scripts.run_train_regression
+.venv/bin/python -m scripts.run_live_tick
+```
+
+After that, cron’s livetick job can run every 2 minutes and append to the Signal log. Optionally run retrain so the classifier is up to date:
+
+```bash
+.venv/bin/python -m scripts.run_daily_retrain --skip-if-recent 20
+```
+
+### 6.4 Copy data from the Mac (alternative)
+
+If you prefer to reuse the Mac’s data instead of re-downloading and retraining on Linux:
+
+1. On the Mac, tar the data (excluding raw if large):  
+   `tar -czvf fwb_data.tar.gz -C /path/to/FreeWillyBot data/processed data/features data/features_regression data/features_regression_core data/models data/logs`
+2. Copy `fwb_data.tar.gz` to the Linux box.
+3. On Linux: `cd /home/tom/dev/FreeWillyBot && tar -xzvf /path/to/fwb_data.tar.gz`
+
+Then run livetick once by hand (6.2) to confirm signals appear.
+
+### 6.5 InconsistentVersionWarning (sklearn pickle)
+
+If you see:
+
+```text
+InconsistentVersionWarning: Trying to unpickle estimator LogisticRegression from version 1.8.0 when using version 1.7.2
+```
+
+**Cause:** The model was saved on a machine with Python 3.11+ and scikit-learn 1.8.0, but this Linux box has Python 3.10 (scikit-learn 1.8+ requires Python 3.11+).
+
+**Options:**
+
+**A) Upgrade Python to 3.11+ (recommended):**
+
+```bash
+# Remove old venv
+rm -rf /home/tom/dev/FreeWillyBot/.venv
+# Create new venv with Python 3.11 (install python3.11 if needed: sudo apt install python3.11 python3.11-venv)
+python3.11 -m venv /home/tom/dev/FreeWillyBot/.venv
+/home/tom/dev/FreeWillyBot/.venv/bin/pip install -r requirements.txt
+```
+
+Then retrain so the pickle matches the new sklearn version:
+```bash
+.venv/bin/python -m scripts.run_daily_retrain --skip-if-recent 0
+```
+
+**B) Retrain on Python 3.10 (keeps 1.7.2):**
+
+If you prefer to stay on Python 3.10, retrain the meta model here so the pickle matches your installed scikit-learn 1.7.2:
+
+```bash
+.venv/bin/python -m scripts.run_daily_retrain --skip-if-recent 0
+```
+
+The warning will stop because the new pickle is from 1.7.2. Note: the model may behave slightly differently due to sklearn version differences, but it should still work.
+
+**C) Ignore the warning:**
+
+The warning is non-fatal; the model may still load and run. Monitor for any actual errors in the logs.

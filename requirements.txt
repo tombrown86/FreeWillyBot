@@ -1,5 +1,6 @@
 # Core (upper bounds reduce pip backtracking)
 pandas>=2.0,<3
+pyarrow>=10.0  # Required for pd.read_parquet() / pd.to_parquet()
 yfinance>=0.2
 requests>=2.28
 
@@ -17,9 +18,10 @@ transformers>=4.49,<4.52
 torch>=2.0,<2.6
 sentencepiece>=0.1.99
 
-# Phase 11 — Training (chronos needs scikit-learn>=1.6; xgboost bound reduces backtracking)
+# Phase 11 — Training (chronos needs scikit-learn>=1.6; >=1.8 requires Python 3.11+)
+# If on Python 3.10, use scikit-learn>=1.6,<1.8 and retrain models on that machine
 xgboost>=2.0,<2.2
-scikit-learn>=1.6,<2
+scikit-learn>=1.8,<2  # Python 3.11+ only; for 3.10 use >=1.6,<1.8
 # timesfm>=1.0  # Optional: requires Python <3.12; Chronos-Bolt is primary
 chronos-forecasting>=2.0
 
