@@ -5,3 +5,10 @@ __pycache__/
 data/raw/
 data/processed/
 *.log
+
+# Runtime data files (regenerated on each run)
+data/features_regression_core/test_live_tail.parquet
+data/logs/execution/*.json
+data/logs/execution/*_state.json
+data/logs/execution/*_cursor.json
+data/predictions/predictions_live.csv
