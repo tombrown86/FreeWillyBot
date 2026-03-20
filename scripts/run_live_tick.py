@@ -322,9 +322,24 @@ def _run_strategy(
     broker_position_ref: dict | None = None,
 ) -> bool:
     sid = strategy["id"]
+    state_snapshot: str | None = None
+    state_file_path = None
     try:
         mod = importlib.import_module(strategy["module"])
         fn = getattr(mod, strategy["fn"])
+
+        # Snapshot the strategy's state file before running so we can roll back if
+        # the broker call fails. Without this, _save_state() inside the strategy
+        # records e.g. current_position=1 before cTrader is called, and a timeout
+        # leaves state and reality permanently out of sync.
+        _sf = getattr(mod, "STATE_FILE", None)
+        if _sf is not None and _sf.exists():
+            try:
+                state_snapshot = _sf.read_text()
+                state_file_path = _sf
+            except Exception:
+                pass
+
         rows = fn(n_bars=1)
         if not rows:
             logging.warning("[%s] No signal produced", sid)
@@ -391,6 +406,15 @@ def _run_strategy(
                 )
         return True
     except Exception as e:
+        # The strategy's _save_state() may have already written an updated position
+        # (e.g. current_position=1) even though the broker call that follows never
+        # succeeded. Restore the pre-run snapshot so the next tick retries correctly.
+        if state_snapshot is not None and state_file_path is not None:
+            try:
+                state_file_path.write_text(state_snapshot)
+                logging.warning("[%s] Rolled back strategy state after execution failure", sid)
+            except Exception as rb_err:
+                logging.warning("[%s] State rollback failed: %s", sid, rb_err)
         logging.exception("[%s] strategy failed: %s", sid, e)
         return False
 
