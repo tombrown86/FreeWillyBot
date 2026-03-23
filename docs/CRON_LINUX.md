@@ -224,8 +224,11 @@ cd /home/tom/dev/FreeWillyBot
 # Also delete predictions_live.csv and order log CSVs (dashboard signal / order tables start empty)
 .venv/bin/python scripts/reset_paper_demo_state.py --signals
 
+# Clear only demo broker order rows from the trade logs (keeps paper/sim rows)
+.venv/bin/python scripts/reset_paper_demo_state.py --demo-orders
+
 # Full wipe (common after debugging multi-strategy demo)
 .venv/bin/python scripts/reset_paper_demo_state.py --also-strategy-state --signals
 ```
 
-The next `run_live_tick` run recreates CSV headers when it appends the first row.
+The next `run_live_tick` run recreates CSV headers when it appends the first row. Using **`--signals`** deletes the whole trade CSVs; **`--demo-orders`** only strips rows with `mode=demo` from `trade_decisions.csv` and `paper_simulation.csv`.

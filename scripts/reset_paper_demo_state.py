@@ -8,12 +8,14 @@ Usage (from repo root):
   python scripts/reset_paper_demo_state.py
   python scripts/reset_paper_demo_state.py --also-strategy-state
   python scripts/reset_paper_demo_state.py --signals
+  python scripts/reset_paper_demo_state.py --demo-orders
   python scripts/reset_paper_demo_state.py --also-strategy-state --signals
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
@@ -23,6 +25,41 @@ EXEC = ROOT / "data" / "logs" / "execution"
 PREDICTIONS_LIVE = ROOT / "data" / "predictions" / "predictions_live.csv"
 TRADE_DECISIONS = EXEC / "trade_decisions.csv"
 PAPER_SIM_CSV = EXEC / "paper_simulation.csv"
+
+
+def strip_demo_rows_from_trade_csv(path: Path) -> None:
+    """Remove rows where mode=demo; keep sim/paper rows. Rewrites file or removes if empty."""
+    if not path.exists():
+        print(f"(skip) {path.name} — not present")
+        return
+    try:
+        with open(path, newline="") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames
+            if not fieldnames:
+                print(f"(skip) {path.name} — no header")
+                return
+            rows = list(reader)
+    except OSError as e:
+        print(f"Could not read {path}: {e}", file=sys.stderr)
+        return
+
+    kept = [r for r in rows if str(r.get("mode", "")).strip().lower() != "demo"]
+    removed = len(rows) - len(kept)
+    try:
+        with open(path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(kept)
+    except OSError as e:
+        print(f"Could not write {path}: {e}", file=sys.stderr)
+        return
+
+    if not kept:
+        path.unlink(missing_ok=True)
+        print(f"Removed {path.name} (only demo rows; file deleted)")
+    else:
+        print(f"{path.name}: removed {removed} demo row(s), kept {len(kept)}")
 
 
 def main() -> int:
@@ -36,6 +73,11 @@ def main() -> int:
         "--signals",
         action="store_true",
         help="Delete live signal + order log CSVs (predictions_live, trade_decisions, paper_simulation). Next tick recreates them.",
+    )
+    p.add_argument(
+        "--demo-orders",
+        action="store_true",
+        help="Remove only demo broker rows (mode=demo) from trade_decisions.csv and paper_simulation.csv; keeps paper/sim rows.",
     )
     args = p.parse_args()
 
@@ -83,6 +125,10 @@ def main() -> int:
         with open(mr, "w") as f:
             json.dump(mr_default, f, indent=2)
         print(f"Wrote {mr}")
+
+    if args.demo_orders:
+        strip_demo_rows_from_trade_csv(TRADE_DECISIONS)
+        strip_demo_rows_from_trade_csv(PAPER_SIM_CSV)
 
     if args.signals:
         for path, label in (
