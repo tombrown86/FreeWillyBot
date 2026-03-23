@@ -22,3 +22,8 @@ data/features_regression_core/train.parquet
 data/features_regression_core/validation.csv
 data/features_regression_core/validation.parquet
 data/validation/walk_forward_windows.csv
+
+# Runtime execution logs (appended each tick / sim run)
+data/features/forecaster_predictions.csv
+data/logs/execution/paper_simulation.csv
+data/logs/execution/trade_decisions.csv
