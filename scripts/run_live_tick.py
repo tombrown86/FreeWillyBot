@@ -75,6 +75,10 @@ def _load_paper_state() -> dict:
                         pos = "flat"
                     eq = float(data[sid].get("equity", 1.0))
                     out[sid] = {"position": pos, "equity": max(eq, 1e-9)}
+            # One demo account: last known net position (for cTrader skip logic)
+            bp = data.get("_demo_broker_pos", "flat")
+            if bp in ("flat", "long", "short"):
+                out["_demo_broker_pos"] = bp
             return out
         except Exception:
             pass
@@ -191,6 +195,28 @@ def _save_paper_state(state: dict) -> None:
     PAPER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(PAPER_STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def _demo_broker_pos_after_action(action_taken: str) -> str | None:
+    """If this action changed the real demo account, return new net position; else None."""
+    at = (action_taken or "").strip().upper()
+    if at in (
+        "OPEN_LONG",
+        "OPEN_LONG_SIMULATED",
+        "REVERSE_TO_LONG_SIMULATED",
+        "REVERSE_TO_LONG",
+    ):
+        return "long"
+    if at in (
+        "OPEN_SHORT",
+        "OPEN_SHORT_SIMULATED",
+        "REVERSE_TO_SHORT_SIMULATED",
+        "REVERSE_TO_SHORT",
+    ):
+        return "short"
+    if at in ("CLOSE", "CLOSE_SIMULATED"):
+        return "flat"
+    return None
 
 
 def _next_sim_position(current: str, action_taken: str) -> str:
@@ -369,27 +395,32 @@ def _run_strategy(
                 from src.execution import process_signal
 
                 st = paper_state.setdefault(sid, {"position": "flat", "equity": 1.0})
-                # When demo_broker, use live broker position; else paper state
-                if demo_broker and broker_position_ref is not None:
-                    pos = broker_position_ref["pos"]
-                else:
-                    pos = st["position"]
+                # Per-strategy simulated book (equity / sim position) vs one shared demo account.
+                sim_pos = st.get("position", "flat")
+                if sim_pos not in ("flat", "long", "short"):
+                    sim_pos = "flat"
                 eq_before = float(st["equity"])
                 br = float(row.get("bar_return") or 0.0)
-                if pos == "long":
+                if sim_pos == "long":
                     eq_after_bar = eq_before * (1.0 + br)
-                elif pos == "short":
+                elif sim_pos == "short":
                     eq_after_bar = eq_before * (1.0 - br)
                 else:
                     eq_after_bar = eq_before
 
                 dry_run = not demo_broker
-                action_taken, broker_response = process_signal(row, pos, dry_run=dry_run)
-                new_pos = _next_sim_position(pos, action_taken)
+                if demo_broker and broker_position_ref is not None:
+                    broker_pos = broker_position_ref["pos"]
+                else:
+                    broker_pos = sim_pos
+                action_taken, broker_response = process_signal(row, broker_pos, dry_run=dry_run)
+                new_pos = _next_sim_position(sim_pos, action_taken)
                 st["equity"] = eq_after_bar
                 st["position"] = new_pos
                 if demo_broker and broker_position_ref is not None:
-                    broker_position_ref["pos"] = new_pos
+                    bp_new = _demo_broker_pos_after_action(action_taken)
+                    if bp_new is not None:
+                        broker_position_ref["pos"] = bp_new
 
                 # Log CSV rows only when a simulated order would fire (skip noisy NONE ticks)
                 if action_taken and str(action_taken).strip().upper() != "NONE":
@@ -528,15 +559,14 @@ def _run_locked(
         paper_state = _load_paper_state() if execute else {}
         broker_position_ref = None
         if execute and demo_broker:
-            # Use paper state for position tracking rather than a live broker reconcile.
-            # The Twisted reactor (used by cTrader SDK) can only start once per process.
-            # Calling _current_position_from_broker() here burns the reactor before
-            # place_market_order() gets to use it, causing ReactorNotRestartable → 30s timeout.
-            # Paper state is kept accurate by the rollback logic in _run_strategy.
-            all_positions = [v.get("position", "flat") for v in paper_state.values() if isinstance(v, dict)]
-            current_pos = next((p for p in all_positions if p != "flat"), "flat")
-            broker_position_ref = {"pos": current_pos}
-            logging.info("Demo broker mode: current position (paper state) = %s", current_pos)
+            # Persisted net demo account position (one broker; not inferred from per-strategy sim).
+            # Twisted reactor can only start once per process — cannot reconcile broker here
+            # before place_market_order(). Updated only when a real order fills.
+            bp = paper_state.get("_demo_broker_pos", "flat")
+            if bp not in ("flat", "long", "short"):
+                bp = "flat"
+            broker_position_ref = {"pos": bp}
+            logging.info("Demo broker mode: account position (persisted) = %s", bp)
         results = [
             _run_strategy(
                 s,
@@ -549,6 +579,8 @@ def _run_locked(
             for s in STRATEGIES
         ]
         if execute:
+            if demo_broker and broker_position_ref is not None:
+                paper_state["_demo_broker_pos"] = broker_position_ref["pos"]
             _save_paper_state(paper_state)
         ok = all(results)
         if ok:
