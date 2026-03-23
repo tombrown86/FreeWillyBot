@@ -552,17 +552,35 @@ def close_position(position_id: str | None = None) -> dict:
         # Get positions first so we know the positionId(s) and volume
         positions_resp = _ctrader_get_positions()
         reconcile_str = positions_resp.get("reconcile", "")
-        # Parse positionId/volume from string representation (fallback: close all by sending large volume)
-        # For a cleaner approach, callers can pass numeric position_id directly
+        open_positions = positions_resp.get("positions", [])
         pid = int(position_id) if position_id else None
-        volume_units = int(CTRADER_VOLUME_LOTS * 100_000)
+
         if pid:
-            resp = _ctrader_close_position(pid, volume_units)
+            # Find actual volume from open positions, fall back to config
+            pos_vol = next(
+                (p.get("volume") for p in open_positions if p.get("positionId") == pid),
+                int(CTRADER_VOLUME_LOTS * 100_000),
+            )
+            resp = _ctrader_close_position(pid, pos_vol)
+            resp["broker"] = "ctrader"
+            _log_broker_response("close_position", resp)
+            return resp
+        elif open_positions:
+            # No specific position_id — close all open positions
+            results = []
+            for pos in open_positions:
+                pos_id = pos.get("positionId")
+                pos_vol = pos.get("volume", int(CTRADER_VOLUME_LOTS * 100_000))
+                r = _ctrader_close_position(pos_id, pos_vol)
+                r["broker"] = "ctrader"
+                _log_broker_response("close_position", r)
+                results.append(r)
+            resp = {"closed": results, "broker": "ctrader"}
+            return resp
         else:
-            resp = {"message": "no position_id provided for ctrader close", "reconcile": reconcile_str}
-        resp["broker"] = "ctrader"
-        _log_broker_response("close_position", resp)
-        return resp
+            resp = {"message": "no open positions to close", "reconcile": reconcile_str, "broker": "ctrader"}
+            _log_broker_response("close_position", resp)
+            return resp
 
     elif broker == "oanda":
         token = os.environ.get("OANDA_ACCESS_TOKEN")

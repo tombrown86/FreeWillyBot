@@ -75,7 +75,7 @@ EXECUTION_TEST_UNITS = 100  # tiny size for test orders (OANDA: 100 units = 0.01
 # cTrader (Pepperstone demo) execution
 CTRADER_HOST_TYPE = "demo"           # "demo" or "live"
 CTRADER_EURUSD_SYMBOL_ID = 1        # cTrader symbol ID for EURUSD; confirm via ProtoOASymbolsListReq
-CTRADER_VOLUME_LOTS: float = 0.01   # minimum lot size (1 lot = 100 000 units; 0.01 = 1 000 units)
+CTRADER_VOLUME_LOTS: float = 1.0    # lot size; 1.0 = 1 standard lot = 100 000 base currency units (minimum for this account)
 
 # Phase 16 — Automation
 PREDICTIONS_LIVE_CSV = "data/predictions/predictions_live.csv"
