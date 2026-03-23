@@ -86,11 +86,13 @@ def main() -> int:
     data = {
         sid: {"position": "flat", "equity": 1.0} for sid in default_strategies
     }
+    for sid in default_strategies:
+        data[f"{sid}_paper"] = {"position": "flat", "equity": 1.0}
     data["_demo_broker_pos"] = "flat"
     paper.parent.mkdir(parents=True, exist_ok=True)
     with open(paper, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"Wrote {paper} (all strategies flat, equity 1.0, _demo_broker_pos=flat)")
+    print(f"Wrote {paper} (all strategies flat, equity 1.0, parallel *_paper keys reset, _demo_broker_pos=flat)")
 
     if args.also_strategy_state:
         reg = EXEC / "regression_v1_state.json"

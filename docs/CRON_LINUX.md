@@ -209,6 +209,23 @@ The warning is non-fatal; the model may still load and run. Monitor for any actu
 
 ---
 
+## Livetick environment variables
+
+| Variable | Meaning |
+|----------|---------|
+| `RUN_LIVETICK_DEMO_BROKER=1` | Send orders to the demo broker (same as `--demo-broker`). |
+| `RUN_LIVETICK_PARALLEL_PAPER_SIM=1` | With demo broker, also run an **independent dry-run** on each bar and persist books under `{strategy_id}_paper` in `paper_sim_state.json`. Order rows use `strategy_id` like `classifier_v1_paper` and `mode=sim` so you can compare to demo fills (`mode=demo`) over time. |
+
+Example (cron one-liner): demo + parallel paper sim.
+
+```bash
+cd $PROJECT && RUN_LIVETICK_DEMO_BROKER=1 RUN_LIVETICK_PARALLEL_PAPER_SIM=1 $PY -m scripts.run_live_tick
+```
+
+CLI equivalent: `python -m scripts.run_live_tick --demo-broker --parallel-paper`.
+
+---
+
 ## Reset paper state, strategy state, and signal history
 
 From the repo root:

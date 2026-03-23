@@ -274,9 +274,13 @@ def load_strategy_live_stats(root: Path, pred_rows: list[dict], paper_state: dic
         out[sid]["bar_lag_hours"] = row.get("bar_lag_hours", "")
         out[sid]["last_bar_source"] = row.get("signal_source", "")
 
-    # Overlay equity / position from paper state
+    # Overlay equity / position from paper state (skip meta keys and parallel `{id}_paper` entries)
     if paper_state and isinstance(paper_state, dict):
         for sid, st in paper_state.items():
+            if sid.startswith("_"):
+                continue
+            if sid.endswith("_paper"):
+                continue
             if isinstance(st, dict):
                 if sid not in out:
                     out[sid] = {
@@ -287,6 +291,19 @@ def load_strategy_live_stats(root: Path, pred_rows: list[dict], paper_state: dic
                     }
                 out[sid]["current_position"] = st.get("position", "?")
                 out[sid]["current_equity"] = st.get("equity")
+        for sid, st in paper_state.items():
+            if not sid.endswith("_paper") or not isinstance(st, dict):
+                continue
+            base = sid[: -len("_paper")]
+            if base not in out:
+                out[base] = {
+                    "last_bar_ts": "", "last_run_at": "",
+                    "signal_counts": {"BUY": 0, "SELL": 0, "FLAT": 0},
+                    "current_position": "?", "current_equity": None,
+                    "last_bar_source": "", "bar_lag_hours": "",
+                }
+            out[base]["parallel_paper_position"] = st.get("position", "?")
+            out[base]["parallel_paper_equity"] = st.get("equity")
     return out
 
 
@@ -652,6 +669,19 @@ def build_html(root: Path) -> str:
         pos        = _html_escape(str(stats.get("current_position", "?")))
         eq         = stats.get("current_equity")
         eq_html    = f"{float(eq):.6f}" if eq is not None else "—"
+        pp_eq = stats.get("parallel_paper_equity")
+        pp_pos = stats.get("parallel_paper_position")
+        parallel_html = ""
+        if pp_eq is not None or pp_pos is not None:
+            try:
+                pp_eq_html = f"{float(pp_eq):.6f}" if pp_eq is not None else "—"
+            except (TypeError, ValueError):
+                pp_eq_html = "—"
+            pp_pos_html = _html_escape(str(pp_pos if pp_pos is not None else "?"))
+            parallel_html = (
+                f" &nbsp;·&nbsp; <span>Parallel paper: pos <strong>{pp_pos_html}</strong></span>"
+                f" &nbsp;·&nbsp; <span>Equity: <strong>{pp_eq_html}</strong></span>"
+            )
         src        = _html_escape(str(stats.get("last_bar_source", "—")))
         locked_badge = '<span class="badge badge-locked">LOCKED CONFIG</span>' if entry.config_locked else ""
         active_badge = '<span class="badge badge-active">ACTIVE</span>' if entry.active else '<span class="badge badge-future">INACTIVE</span>'
@@ -662,6 +692,7 @@ def build_html(root: Path) -> str:
             f" &nbsp;·&nbsp; <span>Last run: <strong>{last_run}</strong></span>"
             f" &nbsp;·&nbsp; <span>Position: <strong>{pos}</strong></span>"
             f" &nbsp;·&nbsp; <span>Equity: <strong>{eq_html}</strong></span>"
+            f"{parallel_html}"
             f" &nbsp;·&nbsp; <span>Source: <code>{src}</code></span>"
             f" &nbsp;·&nbsp; <span class='sig-dist'>BUY <strong>{buy_n}</strong> · SELL <strong>{sell_n}</strong> · FLAT <strong>{flat_n}</strong>"
             + (f" <span class='desc'>(last {total})</span>" if total else "")
@@ -720,11 +751,24 @@ def build_html(root: Path) -> str:
     real_trade_rows  = [r for r in trade_rows if r.get("mode") == "live"]
 
     def _paper_equity_summary(state: dict | None, rows: list[dict], root: Path) -> str:
-        lines = [
-            "<table><thead><tr><th>Strategy</th><th>Simulated equity</th><th>Return vs 1.0</th><th>Position</th></tr></thead><tbody>"
-        ]
-        # Show all strategies from run_live_tick so new strategies appear even before first tick
         strategy_ids = _paper_strategy_ids(root)
+        has_parallel = bool(
+            state and isinstance(state, dict) and any(
+                isinstance(state.get(f"{sid}_paper"), dict) for sid in strategy_ids
+            )
+        )
+        if has_parallel:
+            lines = [
+                "<table><thead><tr>"
+                "<th>Strategy</th><th>Demo-path equity</th><th>Return vs 1.0</th><th>Position</th>"
+                "<th>Parallel paper equity</th><th>Return vs 1.0</th><th>Position</th>"
+                "</tr></thead><tbody>"
+            ]
+        else:
+            lines = [
+                "<table><thead><tr><th>Strategy</th><th>Simulated equity</th><th>Return vs 1.0</th><th>Position</th></tr></thead><tbody>"
+            ]
+        # Show all strategies from run_live_tick so new strategies appear even before first tick
         if state and isinstance(state, dict):
             for sid in sorted(strategy_ids):
                 st = state.get(sid) or {}
@@ -736,12 +780,35 @@ def build_html(root: Path) -> str:
                     pos = str(st.get("position", "flat"))
                 except (TypeError, ValueError):
                     eq, pct, pos = 1.0, 0.0, "?"
-                lines.append(
-                    f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
-                    f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
-                )
+                if has_parallel:
+                    stp = state.get(f"{sid}_paper") or {}
+                    if not isinstance(stp, dict):
+                        stp = {"position": "flat", "equity": 1.0}
+                    try:
+                        eqp = float(stp.get("equity", 1.0))
+                        pctp = (eqp - 1.0) * 100
+                        posp = str(stp.get("position", "flat"))
+                    except (TypeError, ValueError):
+                        eqp, pctp, posp = 1.0, 0.0, "?"
+                    lines.append(
+                        f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+                        f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td>"
+                        f"<td>{eqp:.6f}</td><td>{pctp:+.4f}%</td><td>{_html_escape(posp)}</td></tr>"
+                    )
+                else:
+                    lines.append(
+                        f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+                        f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
+                    )
             lines.append("</tbody></table>")
-            return "".join(lines)
+            note = ""
+            if has_parallel:
+                note = (
+                    "<p class=\"desc\">Demo-path: book updated with demo fills. Parallel paper: "
+                    "independent dry run on the same bar when <code>RUN_LIVETICK_PARALLEL_PAPER_SIM</code> "
+                    "is set with demo broker.</p>"
+                )
+            return "".join(lines) + note
         if trade_err:
             return ""
         strategy_ids = _paper_strategy_ids(root)

@@ -61,28 +61,40 @@ def _default_paper_state() -> dict:
     return {s["id"]: {"position": "flat", "equity": 1.0} for s in STRATEGIES}
 
 
+def _normalize_paper_entry(raw: dict) -> dict:
+    pos = raw.get("position", "flat")
+    if pos not in ("flat", "long", "short"):
+        pos = "flat"
+    eq = float(raw.get("equity", 1.0))
+    return {"position": pos, "equity": max(eq, 1e-9)}
+
+
 def _load_paper_state() -> dict:
+    """Load paper_sim_state.json: per-strategy books, optional `{id}_paper` parallel sim, `_demo_broker_pos`."""
     PAPER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if PAPER_STATE_PATH.exists():
-        try:
-            with open(PAPER_STATE_PATH) as f:
-                data = json.load(f)
-            out = _default_paper_state()
-            for sid in out:
-                if sid in data and isinstance(data[sid], dict):
-                    pos = data[sid].get("position", "flat")
-                    if pos not in ("flat", "long", "short"):
-                        pos = "flat"
-                    eq = float(data[sid].get("equity", 1.0))
-                    out[sid] = {"position": pos, "equity": max(eq, 1e-9)}
-            # One demo account: last known net position (for cTrader skip logic)
-            bp = data.get("_demo_broker_pos", "flat")
-            if bp in ("flat", "long", "short"):
-                out["_demo_broker_pos"] = bp
-            return out
-        except Exception:
-            pass
-    return _default_paper_state()
+    base = _default_paper_state()
+    if not PAPER_STATE_PATH.exists():
+        return base
+    try:
+        with open(PAPER_STATE_PATH) as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return base
+        out: dict = dict(base)
+        strat_ids = {s["id"] for s in STRATEGIES}
+        for k, v in data.items():
+            if k == "_demo_broker_pos":
+                if v in ("flat", "long", "short"):
+                    out[k] = v
+                continue
+            if not isinstance(v, dict):
+                continue
+            if k in strat_ids or (k.endswith("_paper") and k[:-6] in strat_ids):
+                out[k] = _normalize_paper_entry(v)
+        return out
+    except Exception:
+        pass
+    return base
 
 
 def _read_heartbeat() -> dict:
@@ -356,6 +368,7 @@ def _run_strategy(
     *,
     demo_broker: bool = False,
     broker_position_ref: dict | None = None,
+    parallel_paper_sim: bool = False,
 ) -> bool:
     sid = strategy["id"]
     state_snapshot: str | None = None
@@ -393,6 +406,48 @@ def _run_strategy(
 
             if execute:
                 from src.execution import process_signal
+
+                # Independent dry-run book on the same bar as demo (strategy_id = `{sid}_paper` in CSVs).
+                if demo_broker and parallel_paper_sim:
+                    pk = f"{sid}_paper"
+                    st_p = paper_state.setdefault(pk, {"position": "flat", "equity": 1.0})
+                    sim_p = st_p.get("position", "flat")
+                    if sim_p not in ("flat", "long", "short"):
+                        sim_p = "flat"
+                    eq_before_p = float(st_p["equity"])
+                    br = float(row.get("bar_return") or 0.0)
+                    if sim_p == "long":
+                        eq_after_bar_p = eq_before_p * (1.0 + br)
+                    elif sim_p == "short":
+                        eq_after_bar_p = eq_before_p * (1.0 - br)
+                    else:
+                        eq_after_bar_p = eq_before_p
+
+                    action_p, resp_p = process_signal(row, sim_p, dry_run=True)
+                    new_p = _next_sim_position(sim_p, action_p)
+                    st_p["equity"] = eq_after_bar_p
+                    st_p["position"] = new_p
+                    if action_p and str(action_p).strip().upper() != "NONE":
+                        _append_paper_rows(
+                            pk,
+                            row.get("timestamp", ""),
+                            row.get("signal", ""),
+                            row.get("action", ""),
+                            action_p,
+                            resp_p,
+                            run_at,
+                            eq_after_bar_p,
+                            new_p,
+                            br,
+                            mode="sim",
+                        )
+                    logging.info(
+                        "[%s] parallel paper sim: action_taken=%s equity=%.6f position=%s",
+                        sid,
+                        action_p,
+                        eq_after_bar_p,
+                        new_p,
+                    )
 
                 st = paper_state.setdefault(sid, {"position": "flat", "equity": 1.0})
                 # Per-strategy simulated book (equity / sim position) vs one shared demo account.
@@ -466,6 +521,7 @@ def run(
     *,
     allow_auto_refresh: bool = True,
     demo_broker: bool = False,
+    parallel_paper_sim: bool = False,
 ) -> int:
     try:
         import fcntl as _fcntl
@@ -487,6 +543,7 @@ def run(
                 execute=execute,
                 allow_auto_refresh=allow_auto_refresh,
                 demo_broker=demo_broker,
+                parallel_paper_sim=parallel_paper_sim,
             )
         finally:
             try:
@@ -499,6 +556,7 @@ def run(
         execute=execute,
         allow_auto_refresh=allow_auto_refresh,
         demo_broker=demo_broker,
+        parallel_paper_sim=parallel_paper_sim,
     )
 
 
@@ -508,6 +566,7 @@ def _run_locked(
     *,
     allow_auto_refresh: bool = True,
     demo_broker: bool = False,
+    parallel_paper_sim: bool = False,
 ) -> int:
     try:
         if not refresh and _want_auto_refresh(allow_auto_refresh):
@@ -555,6 +614,10 @@ def _run_locked(
         except Exception as _ct_err:
             logging.warning("cTrader live tail refresh failed (%s) — using existing tail", _ct_err)
 
+        if parallel_paper_sim and not demo_broker:
+            logging.warning("Parallel paper sim is only used with demo broker — ignoring")
+            parallel_paper_sim = False
+
         run_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         paper_state = _load_paper_state() if execute else {}
         broker_position_ref = None
@@ -567,6 +630,10 @@ def _run_locked(
                 bp = "flat"
             broker_position_ref = {"pos": bp}
             logging.info("Demo broker mode: account position (persisted) = %s", bp)
+            if parallel_paper_sim:
+                logging.info(
+                    "Parallel paper sim: also persisting independent dry-run books under {id}_paper"
+                )
         results = [
             _run_strategy(
                 s,
@@ -575,6 +642,7 @@ def _run_locked(
                 paper_state,
                 demo_broker=demo_broker,
                 broker_position_ref=broker_position_ref,
+                parallel_paper_sim=parallel_paper_sim,
             )
             for s in STRATEGIES
         ]
@@ -587,6 +655,7 @@ def _run_locked(
             _write_heartbeat(
                 last_full_success_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00"),
                 demo_broker_active="true" if demo_broker else "false",
+                parallel_paper_sim_active="true" if (execute and demo_broker and parallel_paper_sim) else "false",
             )
         return 0 if ok else 1
 
@@ -621,10 +690,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Send real orders to demo broker (cTrader/OANDA/Binance). Overrides RUN_LIVETICK_DEMO_BROKER.",
     )
+    parser.add_argument(
+        "--parallel-paper",
+        action="store_true",
+        help="With demo broker, also run independent dry-run execution on the same bar (RUN_LIVETICK_PARALLEL_PAPER_SIM).",
+    )
     args = parser.parse_args()
     execute = not args.no_execute
     demo_broker = args.demo_broker or (
         os.environ.get("RUN_LIVETICK_DEMO_BROKER", "").strip().lower() in ("1", "true", "yes")
+    )
+    parallel_paper = args.parallel_paper or (
+        os.environ.get("RUN_LIVETICK_PARALLEL_PAPER_SIM", "").strip().lower() in ("1", "true", "yes")
     )
 
     sys.exit(
@@ -633,5 +710,6 @@ if __name__ == "__main__":
             execute=execute,
             allow_auto_refresh=not args.no_auto_refresh,
             demo_broker=demo_broker,
+            parallel_paper_sim=parallel_paper,
         )
     )
