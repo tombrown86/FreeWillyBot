@@ -195,11 +195,21 @@ def _save_paper_state(state: dict) -> None:
 
 def _next_sim_position(current: str, action_taken: str) -> str:
     """Map execution outcome to new simulated position."""
-    if action_taken in ("OPEN_LONG_SIMULATED", "REVERSE_TO_LONG_SIMULATED"):
+    if action_taken in (
+        "OPEN_LONG_SIMULATED",
+        "REVERSE_TO_LONG_SIMULATED",
+        "OPEN_LONG",
+        "REVERSE_TO_LONG",
+    ):
         return "long"
-    if action_taken in ("OPEN_SHORT_SIMULATED", "REVERSE_TO_SHORT_SIMULATED"):
+    if action_taken in (
+        "OPEN_SHORT_SIMULATED",
+        "REVERSE_TO_SHORT_SIMULATED",
+        "OPEN_SHORT",
+        "REVERSE_TO_SHORT",
+    ):
         return "short"
-    if action_taken == "CLOSE_SIMULATED":
+    if action_taken in ("CLOSE_SIMULATED", "CLOSE"):
         return "flat"
     return current
 
