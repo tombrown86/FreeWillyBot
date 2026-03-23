@@ -518,16 +518,15 @@ def _run_locked(
         paper_state = _load_paper_state() if execute else {}
         broker_position_ref = None
         if execute and demo_broker:
-            try:
-                from src.execution import _current_position_from_broker
-                broker_position_ref = {"pos": _current_position_from_broker()}
-                logging.info("Demo broker mode: current position = %s", broker_position_ref["pos"])
-            except Exception as _broker_err:
-                logging.warning(
-                    "Demo broker position fetch failed (%s) — assuming flat and continuing",
-                    _broker_err,
-                )
-                broker_position_ref = {"pos": "flat"}
+            # Use paper state for position tracking rather than a live broker reconcile.
+            # The Twisted reactor (used by cTrader SDK) can only start once per process.
+            # Calling _current_position_from_broker() here burns the reactor before
+            # place_market_order() gets to use it, causing ReactorNotRestartable → 30s timeout.
+            # Paper state is kept accurate by the rollback logic in _run_strategy.
+            all_positions = [v.get("position", "flat") for v in paper_state.values() if isinstance(v, dict)]
+            current_pos = next((p for p in all_positions if p != "flat"), "flat")
+            broker_position_ref = {"pos": current_pos}
+            logging.info("Demo broker mode: current position (paper state) = %s", current_pos)
         results = [
             _run_strategy(
                 s,
