@@ -12,3 +12,13 @@ data/logs/execution/*.json
 data/logs/execution/*_state.json
 data/logs/execution/*_cursor.json
 data/predictions/predictions_live.csv
+
+# Generated feature/model data (rebuilt by pipeline scripts)
+data/features/
+data/features_regression_core/test.csv
+data/features_regression_core/test.parquet
+data/features_regression_core/train.csv
+data/features_regression_core/train.parquet
+data/features_regression_core/validation.csv
+data/features_regression_core/validation.parquet
+data/validation/walk_forward_windows.csv
