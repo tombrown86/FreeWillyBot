@@ -206,3 +206,26 @@ The warning will stop because the new pickle is from 1.7.2. Note: the model may 
 **C) Ignore the warning:**
 
 The warning is non-fatal; the model may still load and run. Monitor for any actual errors in the logs.
+
+---
+
+## Reset paper state, strategy state, and signal history
+
+From the repo root:
+
+```bash
+cd /home/tom/dev/FreeWillyBot
+# Paper sim + demo bookkeeping only (equity 1.0, flat, _demo_broker_pos flat)
+.venv/bin/python scripts/reset_paper_demo_state.py
+
+# Also reset regression + mean-reversion JSON state files
+.venv/bin/python scripts/reset_paper_demo_state.py --also-strategy-state
+
+# Also delete predictions_live.csv and order log CSVs (dashboard signal / order tables start empty)
+.venv/bin/python scripts/reset_paper_demo_state.py --signals
+
+# Full wipe (common after debugging multi-strategy demo)
+.venv/bin/python scripts/reset_paper_demo_state.py --also-strategy-state --signals
+```
+
+The next `run_live_tick` run recreates CSV headers when it appends the first row.

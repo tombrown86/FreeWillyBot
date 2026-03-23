@@ -13,6 +13,7 @@ Optional: --port 8080
 
 import argparse
 import csv
+import html as html_module
 import json
 import sys
 from datetime import datetime
@@ -95,10 +96,14 @@ def load_regression_production_config() -> dict:
         return {"error": "Could not load config"}
 
 
-def load_predictions_live(root: Path) -> tuple[list[dict], str | None]:
-    """Latest 50 rows from predictions_live.csv."""
+# Dashboard shows more rows so client-side filters stay useful.
+DASHBOARD_PREDICTIONS_LIMIT = 500
+
+
+def load_predictions_live(root: Path, *, limit: int = 50) -> tuple[list[dict], str | None]:
+    """Latest `limit` rows from predictions_live.csv (newest at end of file)."""
     path = root / "data" / "predictions" / "predictions_live.csv"
-    return _load_csv(path, limit=50)
+    return _load_csv(path, limit=limit)
 
 
 def load_trade_decisions(root: Path) -> tuple[list[dict], str | None]:
@@ -337,6 +342,159 @@ def _render_table(rows: list[dict], keys: list[str] | None = None) -> str:
     return "\n".join(lines)
 
 
+def _data_attr(name: str, value: object) -> str:
+    """Safe HTML data-* attribute fragment."""
+    v = html_module.escape(str(value), quote=True)
+    return f'data-{name}="{v}"'
+
+
+def _filter_select_options(values: list[str], select_id: str, label: str) -> str:
+    parts = [
+        f'<label class="filter-label">{_html_escape(label)} '
+        f'<select id="{_html_escape(select_id)}">',
+        '<option value="">All</option>',
+    ]
+    for v in values:
+        ev = html_module.escape(str(v), quote=True)
+        parts.append(f'<option value="{ev}">{_html_escape(str(v))}</option>')
+    parts.append("</select></label>")
+    return "".join(parts)
+
+
+def _render_signal_log_block(rows: list[dict], err: str | None) -> str:
+    """Signal log table with strategy / signal / blocked / text filters."""
+    if err:
+        return f"<p>{_html_escape(err)}</p>"
+    if not rows:
+        return (
+            "<p>No signals yet — run <code>python scripts/run_live_tick.py</code> "
+            "to generate the first bar.</p>"
+        )
+    keys = list(rows[0].keys())
+    strategies = sorted({str(r.get("strategy_id", "")) for r in rows if str(r.get("strategy_id", "")).strip()})
+    signals = sorted({str(r.get("signal", "")).upper() for r in rows if str(r.get("signal", "")).strip()})
+    blocked_vals = sorted({str(r.get("blocked", "")) for r in rows})
+
+    filters = (
+        '<div class="table-filters" role="region" aria-label="Signal log filters">'
+        + _filter_select_options(strategies, "siglog-f-strategy", "Strategy")
+        + _filter_select_options(signals, "siglog-f-signal", "Signal")
+        + _filter_select_options(blocked_vals, "siglog-f-blocked", "Blocked")
+        + '<label class="filter-label">Search <input type="search" id="siglog-q" '
+        + 'placeholder="Reason, hint, source…" autocomplete="off"></label>'
+        + '<span id="siglog-count" class="filter-count"></span></div>'
+    )
+
+    thead = "<thead><tr>" + "".join(f"<th>{_html_escape(k)}</th>" for k in keys) + "</tr></thead>"
+    tbody_lines = ['<tbody id="siglog-tbody">']
+    for row in rows:
+        ds = _data_attr("strategy", row.get("strategy_id", ""))
+        sig = _data_attr("signal", str(row.get("signal", "")).upper())
+        blk = _data_attr("blocked", row.get("blocked", ""))
+        tbody_lines.append(f"<tr {ds} {sig} {blk}>")
+        for k in keys:
+            v = row.get(k, "")
+            tbody_lines.append(f"<td>{_html_escape(str(v))}</td>")
+        tbody_lines.append("</tr>")
+    tbody_lines.append("</tbody>")
+    table = f'<table class="filterable-table" id="siglog-table">{thead}{"".join(tbody_lines)}</table>'
+    return filters + table
+
+
+def _render_orders_filter_block(rows: list[dict], table_id: str) -> str:
+    """Orders table with strategy / action / mode filters (demo or paper)."""
+    if not rows:
+        return "<p>No rows</p>"
+    keys = list(rows[0].keys())
+    strategies = sorted({str(r.get("strategy_id", "")) for r in rows if str(r.get("strategy_id", "")).strip()})
+    actions = sorted({str(r.get("action_taken", "")) for r in rows if str(r.get("action_taken", "")).strip()})
+    modes = sorted({str(r.get("mode", "")) for r in rows if str(r.get("mode", "")).strip()})
+
+    filters = (
+        f'<div class="table-filters" role="region" aria-label="Order filters">'
+        + _filter_select_options(strategies, f"{table_id}-f-strategy", "Strategy")
+        + _filter_select_options(actions, f"{table_id}-f-action", "Action taken")
+        + _filter_select_options(modes, f"{table_id}-f-mode", "Mode")
+        + f'<label class="filter-label">Search <input type="search" id="{table_id}-q" '
+        + 'placeholder="Timestamp, response…" autocomplete="off"></label>'
+        + f'<span id="{table_id}-count" class="filter-count"></span></div>'
+    )
+
+    thead = "<thead><tr>" + "".join(f"<th>{_html_escape(k)}</th>" for k in keys) + "</tr></thead>"
+    tbody_lines = [f'<tbody id="{table_id}-tbody">']
+    for row in rows:
+        ds = _data_attr("strategy", row.get("strategy_id", ""))
+        da = _data_attr("action", row.get("action_taken", ""))
+        dm = _data_attr("mode", row.get("mode", ""))
+        tbody_lines.append(f"<tr {ds} {da} {dm}>")
+        for k in keys:
+            v = row.get(k, "")
+            tbody_lines.append(f"<td>{_html_escape(str(v))}</td>")
+        tbody_lines.append("</tr>")
+    tbody_lines.append("</tbody>")
+    table = f'<table class="filterable-table" id="{table_id}-table">{thead}{"".join(tbody_lines)}</table>'
+    return filters + table
+
+
+def _dashboard_table_filter_script() -> str:
+    """Client-side filters for signal log and order tables."""
+    return r"""
+<script>
+(function () {
+  function debounce(fn, ms) {
+    var t;
+    return function () {
+      clearTimeout(t);
+      var args = arguments, self = this;
+      t = setTimeout(function () { fn.apply(self, args); }, ms);
+    };
+  }
+  function bindTable(cfg) {
+    var id = cfg.id;
+    var tbody = document.getElementById(id + "-tbody");
+    if (!tbody) return;
+    var countEl = document.getElementById(id + "-count");
+    var fields = cfg.fields || [];
+
+    function apply() {
+      var qEl = document.getElementById(id + "-q");
+      var q = (qEl && qEl.value || "").toLowerCase().trim();
+      var n = 0, tot = 0;
+      tbody.querySelectorAll("tr").forEach(function (tr) {
+        tot++;
+        var ok = true;
+        fields.forEach(function (f) {
+          var sel = document.getElementById(id + "-f-" + f);
+          if (!sel || !sel.value) return;
+          var dv = tr.getAttribute("data-" + f) || "";
+          if (dv !== sel.value) ok = false;
+        });
+        if (ok && q) {
+          var txt = (tr.textContent || "").toLowerCase();
+          if (txt.indexOf(q) < 0) ok = false;
+        }
+        tr.style.display = ok ? "" : "none";
+        if (ok) n++;
+      });
+      if (countEl) countEl.textContent = n + " / " + tot + " rows";
+    }
+
+    fields.forEach(function (f) {
+      var sel = document.getElementById(id + "-f-" + f);
+      if (sel) sel.addEventListener("change", apply);
+    });
+    var qEl = document.getElementById(id + "-q");
+    if (qEl) qEl.addEventListener("input", debounce(apply, 200));
+    apply();
+  }
+  bindTable({ id: "siglog", fields: ["strategy", "signal", "blocked"] });
+  bindTable({ id: "orddemo", fields: ["strategy", "action", "mode"] });
+  bindTable({ id: "ordpaper", fields: ["strategy", "action", "mode"] });
+})();
+</script>
+"""
+
+
 def _wf_format_cell(key: str, value: object) -> str:
     """Format walk-forward CSV cells: net_return and max_dd as %, profit_factor rounded."""
     if value is None or value == "":
@@ -414,7 +572,7 @@ def build_html(root: Path) -> str:
     """Build full dashboard HTML."""
     cfg = load_config_summary()
     reg_cfg = load_regression_production_config()
-    pred_rows, pred_err = load_predictions_live(root)
+    pred_rows, pred_err = load_predictions_live(root, limit=DASHBOARD_PREDICTIONS_LIMIT)
     trade_rows, trade_err = load_trade_decisions(root)
     paper_state = load_paper_sim_state(root)
     heartbeat = load_livetick_heartbeat(root)
@@ -631,23 +789,23 @@ def build_html(root: Path) -> str:
         at = str(r.get("action_taken", "")).strip().upper()
         return bool(at) and at != "NONE"
 
-    def _orders_html(rows: list[dict], empty_msg: str) -> str:
-        order_rows = [r for r in rows if _is_order_row(r)]
+    def _orders_html(rows: list[dict], empty_msg: str, table_id: str) -> str:
         if trade_err:
             return trade_err
-        return (
-            _render_table(order_rows[-100:])
-            if order_rows
-            else f"<p>{empty_msg}</p>"
-        )
+        order_rows = [r for r in rows if _is_order_row(r)]
+        if not order_rows:
+            return f"<p>{empty_msg}</p>"
+        return _render_orders_filter_block(order_rows[-200:], table_id)
 
     paper_orders_html = _orders_html(
         paper_trade_rows,
         "No paper orders yet — strategies stay flat on most bars; open/close/reverse rows appear here when filters pass.",
+        "ordpaper",
     )
     demo_orders_html = _orders_html(
         demo_trade_rows,
         "No demo broker orders yet — orders will appear here when the next tick places or changes a position.",
+        "orddemo",
     )
     real_trade_html = (
         _render_table(real_trade_rows) if real_trade_rows else
@@ -673,11 +831,8 @@ def build_html(root: Path) -> str:
     base_html = base_err if base_err else _render_json_block(baseline) if baseline else "<p>No data</p>"
     meta_html = meta_err if meta_err else _render_json_block(meta_cfg) if meta_cfg else "<p>No data</p>"
 
-    # ── pred signal table ─────────────────────────────────────────────────────
-    pred_html = pred_err if pred_err else (
-        _render_table(pred_rows) if pred_rows else
-        "<p>No signals yet — run <code>python scripts/run_live_tick.py</code> to generate the first bar.</p>"
-    )
+    # ── pred signal table (filterable) ───────────────────────────────────────
+    pred_html = _render_signal_log_block(pred_rows, pred_err)
 
     # ── collapsible execution blocks ─────────────────────────────────────────
     _paper_open = "" if is_demo else " open"
@@ -711,7 +866,8 @@ Position is read from the broker; equity is tracked locally starting at 1.0.
 State is saved in <code>paper_sim_state.json</code> (shared with paper sim).</p>
 {paper_equity_html if is_demo else _equity_note_paper}
 <h3>Orders <span class="badge badge-demo">DEMO</span></h3>
-<p class="desc">Orders placed or changed on the demo broker account. <code>NONE</code> rows are suppressed.</p>
+<p class="desc">Orders placed or changed on the demo broker account. <code>NONE</code> rows are suppressed.
+Latest 200 rows; use filters to narrow by strategy or action.</p>
 {demo_orders_html}
 </section>
 </details>"""
@@ -812,6 +968,15 @@ details > section, details > .details-body {{ padding: 0.75rem 1rem; }}
 .inner-body {{ padding: 0.5rem 0.75rem; }}
 .logo-header {{ text-align: center; margin-bottom: 0.5rem; }}
 .dashboard-logo {{ max-width: 200px; height: auto; display: block; margin: 0 auto; }}
+.table-filters {{ display: flex; flex-wrap: wrap; gap: 0.65rem 1rem; align-items: center;
+                  margin: 0.5rem 0 0.85rem 0; padding: 0.5rem 0.65rem; background: #1e1e1e;
+                  border: 1px solid #333; border-radius: 4px; }}
+.filter-label {{ font-size: 0.82rem; color: #ccc; }}
+.table-filters select, .table-filters input[type="search"] {{
+    background: #2a2a2a; color: #e8e8e8; border: 1px solid #555; border-radius: 3px;
+    padding: 0.28rem 0.45rem; font-size: 0.82rem; margin-left: 0.25rem; max-width: 14rem; }}
+.filter-count {{ font-size: 0.78rem; color: #888; margin-left: 0.25rem; }}
+.filterable-table {{ margin-top: 0.25rem; }}
 </style>
 </head>
 <body>
@@ -836,13 +1001,14 @@ Expand a card to see its technique, live parameters, and last-tick stats.</p>
 <p class="desc">Every time the live tick runs, each strategy evaluates the latest bar and records what it <em>would</em> do{"." if not is_demo else ", and sends an order to the demo broker account."}</p>
 
 <section>
-<h3>Signal log — latest 50 bars</h3>
+<h3>Signal log — latest {DASHBOARD_PREDICTIONS_LIMIT} rows</h3>
 <p class="desc">One row per strategy per tick. <strong>timestamp</strong> is the <em>bar close time</em> in the data (not necessarily &quot;now&quot;).
 <strong>bar_lag_hours</strong> = hours between that bar and when the tick ran (large = stale features — run data refresh).
 <strong>signal_source</strong>: <code>test_csv_tail</code> = classifier last bar; <code>regression_features_tail</code> = regression last bar + live model prediction; <code>replay_predictions</code> only if <code>REGRESSION_LIVE_USE_FEATURE_TAIL = False</code> in config.
 <strong>run_at</strong> = wall-clock UTC when the job ran.
 <strong>readiness_0_100</strong> = rough how close to a trade (100 = this bar fired an open/close/reverse).
-<strong>trade_hint</strong> = plain-English: what is missing (confidence, vol, extreme pred, risk pause, etc.).</p>
+<strong>trade_hint</strong> = plain-English: what is missing (confidence, vol, extreme pred, risk pause, etc.).
+Use the filters below to narrow by strategy, signal, blocked flag, or text search.</p>
 <p class="signal-dist">{signal_dist}</p>
 {pred_html}
 </section>
@@ -926,6 +1092,7 @@ If these timestamps are old, signals may be based on stale data.</p>
 {freshness_html}
 </section>
 
+{_dashboard_table_filter_script()}
 </body>
 </html>"""
 

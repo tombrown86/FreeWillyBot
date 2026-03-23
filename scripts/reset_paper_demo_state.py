@@ -7,6 +7,8 @@ Use after confusion from multi-strategy demo bugs or when you want equity/positi
 Usage (from repo root):
   python scripts/reset_paper_demo_state.py
   python scripts/reset_paper_demo_state.py --also-strategy-state
+  python scripts/reset_paper_demo_state.py --signals
+  python scripts/reset_paper_demo_state.py --also-strategy-state --signals
 """
 
 from __future__ import annotations
@@ -18,6 +20,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 EXEC = ROOT / "data" / "logs" / "execution"
+PREDICTIONS_LIVE = ROOT / "data" / "predictions" / "predictions_live.csv"
+TRADE_DECISIONS = EXEC / "trade_decisions.csv"
+PAPER_SIM_CSV = EXEC / "paper_simulation.csv"
 
 
 def main() -> int:
@@ -26,6 +31,11 @@ def main() -> int:
         "--also-strategy-state",
         action="store_true",
         help="Also reset regression_v1_state.json and mean_reversion_v1_state.json to defaults (not classifier).",
+    )
+    p.add_argument(
+        "--signals",
+        action="store_true",
+        help="Delete live signal + order log CSVs (predictions_live, trade_decisions, paper_simulation). Next tick recreates them.",
     )
     args = p.parse_args()
 
@@ -73,6 +83,21 @@ def main() -> int:
         with open(mr, "w") as f:
             json.dump(mr_default, f, indent=2)
         print(f"Wrote {mr}")
+
+    if args.signals:
+        for path, label in (
+            (PREDICTIONS_LIVE, "predictions_live.csv"),
+            (TRADE_DECISIONS, "trade_decisions.csv"),
+            (PAPER_SIM_CSV, "paper_simulation.csv"),
+        ):
+            try:
+                if path.exists():
+                    path.unlink()
+                    print(f"Removed {path} ({label})")
+                else:
+                    print(f"(skip) {label} — not present")
+            except OSError as e:
+                print(f"Could not remove {path}: {e}", file=sys.stderr)
 
     return 0
 
