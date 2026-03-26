@@ -1007,8 +1007,8 @@ def build_html(root: Path) -> str:
 <section>
 {"" if is_demo else (
     '<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>'
-    '<p class="desc">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged. '
-    'While long or short, each bar applies that bar\'s return. Reset via <code>paper_sim_state.json</code> or the reset script.</p>'
+    "<p class=\"desc\">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged. "
+    "While long or short, each bar applies that bar's return. Reset via <code>paper_sim_state.json</code> or the reset script.</p>"
     + paper_sim_equity_html
 )}
 {_paper_parallel_section if is_demo else ""}
