@@ -17,6 +17,7 @@ import importlib
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -301,15 +302,44 @@ TRADE_DECISION_FIELDS = [
     "strategy_id",
     "mode",
     "timestamp",
+    "bar_close_utc",
     "signal",
     "action_from_model",
     "action_taken",
     "sim_equity",
     "sim_position_after",
     "bar_return",
+    "account_position_before",
     "broker_response",
+    "order_open_utc",
     "run_at",
 ]
+
+
+def _parse_order_open_time_utc(broker_response: str) -> str:
+    """Best-effort: cTrader protobuf text often embeds openTimestamp (ms since epoch)."""
+    if not broker_response:
+        return ""
+    text = broker_response
+    try:
+        d = json.loads(broker_response)
+        if isinstance(d, dict):
+            inner = d.get("order_response") or d.get("order_response_text")
+            if isinstance(inner, str):
+                text = inner
+            elif inner is not None:
+                text = str(inner)
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r"openTimestamp:\s*(\d{10,})", text)
+    if not m:
+        return ""
+    try:
+        ms = int(m.group(1))
+        dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (ValueError, OSError):
+        return ""
 
 
 def _append_paper_rows(
@@ -325,18 +355,24 @@ def _append_paper_rows(
     bar_return: float,
     *,
     mode: str = "sim",
+    account_position_before: str = "",
 ) -> None:
+    bar_close = (timestamp or "").strip()
+    order_open = _parse_order_open_time_utc(broker_response) if mode == "demo" else ""
     row = {
         "strategy_id": strategy_id,
         "mode": mode,
         "timestamp": timestamp,
+        "bar_close_utc": bar_close,
         "signal": signal,
         "action_from_model": action_model,
         "action_taken": action_taken,
         "sim_equity": f"{sim_equity:.6f}",
         "sim_position_after": sim_position_after,
         "bar_return": f"{bar_return:.8f}",
+        "account_position_before": account_position_before,
         "broker_response": broker_response,
+        "order_open_utc": order_open,
         "run_at": run_at,
     }
     for path in (PROJECT_ROOT / TRADE_DECISIONS_CSV, PAPER_SIM_CSV):
@@ -346,7 +382,10 @@ def _append_paper_rows(
         if exists:
             with open(path) as f:
                 first = f.readline()
-            if first.strip() and "sim_equity" not in first:
+            if first.strip() and (
+                "sim_equity" not in first
+                or "account_position_before" not in first
+            ):
                 legacy = path.with_name(
                     path.stem + "_legacy_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".csv"
                 )
@@ -440,6 +479,7 @@ def _run_strategy(
                             new_p,
                             br,
                             mode="sim",
+                            account_position_before=sim_p,
                         )
                     logging.info(
                         "[%s] parallel paper sim: action_taken=%s equity=%.6f position=%s",
@@ -468,6 +508,7 @@ def _run_strategy(
                     broker_pos = broker_position_ref["pos"]
                 else:
                     broker_pos = sim_pos
+                account_before = broker_pos
                 action_taken, broker_response = process_signal(row, broker_pos, dry_run=dry_run)
                 new_pos = _next_sim_position(sim_pos, action_taken)
                 st["equity"] = eq_after_bar
@@ -476,6 +517,18 @@ def _run_strategy(
                     bp_new = _demo_broker_pos_after_action(action_taken)
                     if bp_new is not None:
                         broker_position_ref["pos"] = bp_new
+
+                if demo_broker and str(action_taken or "").strip().upper() == "NONE":
+                    ma = str(row.get("action", "") or "").strip().upper()
+                    br = broker_response or ""
+                    if ma and ma != "NONE" and "skipped" in br:
+                        logging.info(
+                            "[%s] demo: skipped (model_action=%s account_before=%s) — %s",
+                            sid,
+                            ma,
+                            account_before,
+                            br[:500],
+                        )
 
                 # Log CSV rows only when a simulated order would fire (skip noisy NONE ticks)
                 if action_taken and str(action_taken).strip().upper() != "NONE":
@@ -491,6 +544,7 @@ def _run_strategy(
                         new_pos,
                         br,
                         mode="demo" if demo_broker else "sim",
+                        account_position_before=account_before,
                     )
                 logging.info(
                     "[%s] %s: action_taken=%s equity=%.6f position=%s",

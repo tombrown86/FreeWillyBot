@@ -366,7 +366,13 @@ def _ctrader_get_positions() -> dict:
 
 
 def _ctrader_close_position(position_id: int, volume_units: int) -> dict:
-    """Close a specific position by ID."""
+    """Close a specific position by ID.
+
+    NOTE: only call this if you are already inside a _ctrader_call work_fn and therefore
+    already have an authenticated client + running reactor.  Do NOT use this directly from
+    application code; use _ctrader_close_all() which does reconcile+close in one reactor
+    session to avoid ReactorNotRestartable.
+    """
     from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAClosePositionReq
 
     def work(c, access_token, account_id, result):
@@ -390,6 +396,94 @@ def _ctrader_close_position(position_id: int, volume_units: int) -> dict:
 
         d.addCallback(on_resp)
         d.addErrback(on_err)
+
+    return _ctrader_call(work)
+
+
+def _ctrader_close_all() -> dict:
+    """
+    Reconcile open positions AND close them all in a SINGLE reactor session.
+
+    The Twisted reactor is a process-level singleton — once reactor.run() has been
+    called and stopped, it cannot be restarted (ReactorNotRestartable).  The old
+    close_position() code called _ctrader_get_positions() then _ctrader_close_position()
+    as two separate _ctrader_call() invocations, which caused the second call to hang
+    for the full 30-second timeout every single time after the first cTrader call in
+    that process.
+
+    This function does reconcile → close-all in one work_fn so only one reactor session
+    is needed.
+    """
+    from ctrader_open_api.messages.OpenApiMessages_pb2 import (
+        ProtoOAClosePositionReq,
+        ProtoOAReconcileReq,
+    )
+    from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATradeSide
+    from ctrader_open_api import Protobuf
+
+    def work(c, access_token, account_id, result):
+        # Step 1: reconcile to get open positions
+        rec_req = ProtoOAReconcileReq()
+        rec_req.ctidTraderAccountId = account_id
+        d = c.send(rec_req)
+
+        def on_reconcile(resp):
+            extracted = Protobuf.extract(resp) if hasattr(resp, "payloadType") else resp
+            positions = []
+            for pos in extracted.position:
+                td = pos.tradeData
+                positions.append({
+                    "positionId": int(pos.positionId),
+                    "volume": int(td.volume),
+                    "tradeSide": ProtoOATradeSide.Name(td.tradeSide) if td.tradeSide else "",
+                })
+
+            if not positions:
+                result["data"] = {"closed": [], "message": "no open positions"}
+                result["done"].set()
+                _ctrader_safe_stop_reactor()
+                return
+
+            # Step 2: close all positions; wait for each response before signalling done
+            closed_results: list[dict] = []
+            pending = {"count": len(positions)}
+
+            def on_close_resp(resp, pos_id):
+                ext = Protobuf.extract(resp) if hasattr(resp, "payloadType") else resp
+                closed_results.append({"close_response": str(ext), "positionId": pos_id})
+                pending["count"] -= 1
+                if pending["count"] <= 0:
+                    result["data"] = {"closed": closed_results}
+                    result["done"].set()
+                    _ctrader_safe_stop_reactor()
+
+            def on_close_err(f, pos_id):
+                err_msg = str(f.value) if hasattr(f, "value") else str(f)
+                logging.warning("cTrader close error for pos %s: %s", pos_id, err_msg)
+                closed_results.append({"error": err_msg, "positionId": pos_id})
+                pending["count"] -= 1
+                if pending["count"] <= 0:
+                    # Partial success — return what we got
+                    result["data"] = {"closed": closed_results}
+                    result["done"].set()
+                    _ctrader_safe_stop_reactor()
+
+            for pos in positions:
+                close_req = ProtoOAClosePositionReq()
+                close_req.ctidTraderAccountId = account_id
+                close_req.positionId = pos["positionId"]
+                close_req.volume = pos["volume"]
+                dc = c.send(close_req)
+                dc.addCallback(on_close_resp, pos["positionId"])
+                dc.addErrback(on_close_err, pos["positionId"])
+
+        def on_reconcile_err(f):
+            result["error"] = str(f.value) if hasattr(f, "value") else str(f)
+            result["done"].set()
+            _ctrader_safe_stop_reactor()
+
+        d.addCallback(on_reconcile)
+        d.addErrback(on_reconcile_err)
 
     return _ctrader_call(work)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -535,7 +629,14 @@ def get_open_positions() -> dict:
 
 
 def close_position(position_id: str | None = None) -> dict:
-    """Close a position. For OANDA pass position_id; for Binance close BTC position."""
+    """Close a position. For OANDA pass position_id; for Binance close BTC position.
+
+    For cTrader: always closes ALL open positions in a single reactor session via
+    _ctrader_close_all(), regardless of position_id argument.  The old approach
+    (separate reconcile call + close call) caused ReactorNotRestartable on every
+    close attempt after the first cTrader call in the same process, resulting in
+    30-second timeouts on every tick.
+    """
     if not EXECUTION_PAPER_ONLY:
         raise RuntimeError("EXECUTION_PAPER_ONLY must be True")
 
@@ -549,38 +650,11 @@ def close_position(position_id: str | None = None) -> dict:
             out = {"simulated": True, "action": "close", "broker": "ctrader"}
             _log_broker_response("close_position", out)
             return out
-        # Get positions first so we know the positionId(s) and volume
-        positions_resp = _ctrader_get_positions()
-        reconcile_str = positions_resp.get("reconcile", "")
-        open_positions = positions_resp.get("positions", [])
-        pid = int(position_id) if position_id else None
-
-        if pid:
-            # Find actual volume from open positions, fall back to config
-            pos_vol = next(
-                (p.get("volume") for p in open_positions if p.get("positionId") == pid),
-                int(CTRADER_VOLUME_LOTS * 100_000),
-            )
-            resp = _ctrader_close_position(pid, pos_vol)
-            resp["broker"] = "ctrader"
-            _log_broker_response("close_position", resp)
-            return resp
-        elif open_positions:
-            # No specific position_id — close all open positions
-            results = []
-            for pos in open_positions:
-                pos_id = pos.get("positionId")
-                pos_vol = pos.get("volume", int(CTRADER_VOLUME_LOTS * 100_000))
-                r = _ctrader_close_position(pos_id, pos_vol)
-                r["broker"] = "ctrader"
-                _log_broker_response("close_position", r)
-                results.append(r)
-            resp = {"closed": results, "broker": "ctrader"}
-            return resp
-        else:
-            resp = {"message": "no open positions to close", "reconcile": reconcile_str, "broker": "ctrader"}
-            _log_broker_response("close_position", resp)
-            return resp
+        # Single reactor session: reconcile + close all in one _ctrader_call
+        resp = _ctrader_close_all()
+        resp["broker"] = "ctrader"
+        _log_broker_response("close_position", resp)
+        return resp
 
     elif broker == "oanda":
         token = os.environ.get("OANDA_ACCESS_TOKEN")
