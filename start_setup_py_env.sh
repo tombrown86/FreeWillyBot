@@ -9,6 +9,10 @@ PY="${ROOT}/.venv/bin/python"
 PIP="${ROOT}/.venv/bin/pip"
 
 if [[ ! -x "$PY" ]]; then
+  if [[ -d "${ROOT}/.venv" ]]; then
+    echo "Removing incomplete .venv ..."
+    rm -rf "${ROOT}/.venv"
+  fi
   echo "Creating virtualenv at ${ROOT}/.venv ..."
   python3 -m venv "${ROOT}/.venv"
 fi
