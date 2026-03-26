@@ -98,6 +98,9 @@ def load_regression_production_config() -> dict:
 
 # Dashboard shows more rows so client-side filters stay useful.
 DASHBOARD_PREDICTIONS_LIMIT = 500
+# Signal log: render at most this many rows; show first N visible by default (expand for the rest).
+DASHBOARD_SIGNAL_LOG_CAP = 100
+DASHBOARD_SIGNAL_LOG_VISIBLE = 10
 
 
 def load_predictions_live(root: Path, *, limit: int = 50) -> tuple[list[dict], str | None]:
@@ -359,6 +362,56 @@ def _render_table(rows: list[dict], keys: list[str] | None = None) -> str:
     return "\n".join(lines)
 
 
+def _equity_table_from_state(
+    state: dict | None,
+    root: Path,
+    *,
+    key_suffix: str | None,
+) -> str:
+    """Per-strategy equity from paper_sim_state: key is sid, or sid + '_paper' for parallel sim."""
+    if not state or not isinstance(state, dict):
+        return ""
+    strategy_ids = _paper_strategy_ids(root)
+    suf = key_suffix or ""
+    parts: list[str] = []
+    for sid in sorted(strategy_ids):
+        key = f"{sid}{suf}" if suf else sid
+        st = state.get(key)
+        if not isinstance(st, dict):
+            st = {"position": "flat", "equity": 1.0}
+        try:
+            eq = float(st.get("equity", 1.0))
+            pct = (eq - 1.0) * 100
+            pos = str(st.get("position", "flat"))
+        except (TypeError, ValueError):
+            eq, pct, pos = 1.0, 0.0, "?"
+        parts.append(
+            f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+            f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
+        )
+    if not parts:
+        return ""
+    return (
+        '<table class="equity-table"><thead><tr>'
+        '<th>Strategy</th><th>Equity</th><th>Return</th><th>Position</th>'
+        "</tr></thead><tbody>"
+        + "".join(parts)
+        + "</tbody></table>"
+    )
+
+
+def _split_sim_order_rows(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Rows with strategy_id ending in _paper (parallel paper) vs other mode=sim rows."""
+    parallel: list[dict] = []
+    main: list[dict] = []
+    for r in rows:
+        if str(r.get("mode", "sim")).strip().lower() != "sim":
+            continue
+        sid = str(r.get("strategy_id", ""))
+        (parallel if sid.endswith("_paper") else main).append(r)
+    return parallel, main
+
+
 def _data_attr(name: str, value: object) -> str:
     """Safe HTML data-* attribute fragment."""
     v = html_module.escape(str(value), quote=True)
@@ -378,8 +431,14 @@ def _filter_select_options(values: list[str], select_id: str, label: str) -> str
     return "".join(parts)
 
 
-def _render_signal_log_block(rows: list[dict], err: str | None) -> str:
-    """Signal log table with strategy / signal / blocked / text filters."""
+def _render_signal_log_block(
+    rows: list[dict],
+    err: str | None,
+    *,
+    visible_rows: int = DASHBOARD_SIGNAL_LOG_VISIBLE,
+    cap_rows: int = DASHBOARD_SIGNAL_LOG_CAP,
+) -> str:
+    """Signal log table with strategy / signal / blocked / text filters. Newest rows at end."""
     if err:
         return f"<p>{_html_escape(err)}</p>"
     if not rows:
@@ -387,6 +446,8 @@ def _render_signal_log_block(rows: list[dict], err: str | None) -> str:
             "<p>No signals yet — run <code>python scripts/run_live_tick.py</code> "
             "to generate the first bar.</p>"
         )
+    if len(rows) > cap_rows:
+        rows = rows[-cap_rows:]
     keys = list(rows[0].keys())
     strategies = sorted({str(r.get("strategy_id", "")) for r in rows if str(r.get("strategy_id", "")).strip()})
     signals = sorted({str(r.get("signal", "")).upper() for r in rows if str(r.get("signal", "")).strip()})
@@ -404,17 +465,31 @@ def _render_signal_log_block(rows: list[dict], err: str | None) -> str:
 
     thead = "<thead><tr>" + "".join(f"<th>{_html_escape(k)}</th>" for k in keys) + "</tr></thead>"
     tbody_lines = ['<tbody id="siglog-tbody">']
-    for row in rows:
+    n = len(rows)
+    for i, row in enumerate(rows):
+        # Oldest rows are hidden first; newest `visible_rows` stay visible when collapsed.
+        extra = " siglog-row-extra" if n > visible_rows and i < n - visible_rows else ""
         ds = _data_attr("strategy", row.get("strategy_id", ""))
         sig = _data_attr("signal", str(row.get("signal", "")).upper())
         blk = _data_attr("blocked", row.get("blocked", ""))
-        tbody_lines.append(f"<tr {ds} {sig} {blk}>")
+        tbody_lines.append(f"<tr class=\"siglog-tr{extra}\" {ds} {sig} {blk}>")
         for k in keys:
             v = row.get(k, "")
             tbody_lines.append(f"<td>{_html_escape(str(v))}</td>")
         tbody_lines.append("</tr>")
     tbody_lines.append("</tbody>")
-    table = f'<table class="filterable-table" id="siglog-table">{thead}{"".join(tbody_lines)}</table>'
+    collapse_note = ""
+    if n > visible_rows:
+        collapse_note = (
+            f'<p class="siglog-collapse-bar"><button type="button" class="siglog-expand-btn" '
+            f'id="siglog-expand-btn" aria-expanded="false">Show older rows (1–{n - visible_rows})</button> '
+            f'<span class="desc">Showing newest {visible_rows} of {n} loaded (up to {DASHBOARD_PREDICTIONS_LIMIT} in file).</span></p>'
+        )
+    table = (
+        f'<div id="siglog-wrap" class="siglog-wrap-collapsed">'
+        f'<table class="filterable-table" id="siglog-table">{thead}{"".join(tbody_lines)}</table>'
+        f"{collapse_note}</div>"
+    )
     return filters + table
 
 
@@ -458,6 +533,7 @@ def _dashboard_table_filter_script() -> str:
     return r"""
 <script>
 (function () {
+  var siglogApplyRef = null;
   function debounce(fn, ms) {
     var t;
     return function () {
@@ -466,7 +542,7 @@ def _dashboard_table_filter_script() -> str:
       t = setTimeout(function () { fn.apply(self, args); }, ms);
     };
   }
-  function bindTable(cfg) {
+    function bindTable(cfg) {
     var id = cfg.id;
     var tbody = document.getElementById(id + "-tbody");
     if (!tbody) return;
@@ -477,6 +553,7 @@ def _dashboard_table_filter_script() -> str:
       var qEl = document.getElementById(id + "-q");
       var q = (qEl && qEl.value || "").toLowerCase().trim();
       var n = 0, tot = 0;
+      var wrap = id === "siglog" ? document.getElementById("siglog-wrap") : null;
       tbody.querySelectorAll("tr").forEach(function (tr) {
         tot++;
         var ok = true;
@@ -490,8 +567,12 @@ def _dashboard_table_filter_script() -> str:
           var txt = (tr.textContent || "").toLowerCase();
           if (txt.indexOf(q) < 0) ok = false;
         }
-        tr.style.display = ok ? "" : "none";
-        if (ok) n++;
+        var show = ok;
+        if (ok && wrap && wrap.classList.contains("siglog-wrap-collapsed") && tr.classList.contains("siglog-row-extra")) {
+          show = false;
+        }
+        tr.style.display = show ? "" : "none";
+        if (show) n++;
       });
       if (countEl) countEl.textContent = n + " / " + tot + " rows";
     }
@@ -503,10 +584,22 @@ def _dashboard_table_filter_script() -> str:
     var qEl = document.getElementById(id + "-q");
     if (qEl) qEl.addEventListener("input", debounce(apply, 200));
     apply();
+    if (id === "siglog") siglogApplyRef = apply;
   }
   bindTable({ id: "siglog", fields: ["strategy", "signal", "blocked"] });
   bindTable({ id: "orddemo", fields: ["strategy", "action", "mode"] });
   bindTable({ id: "ordpaper", fields: ["strategy", "action", "mode"] });
+  (function () {
+    var wrap = document.getElementById("siglog-wrap");
+    var btn = document.getElementById("siglog-expand-btn");
+    if (!wrap || !btn) return;
+    btn.addEventListener("click", function () {
+      var collapsed = wrap.classList.toggle("siglog-wrap-collapsed");
+      btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      btn.textContent = collapsed ? "Show older rows" : "Show only newest 10 rows";
+      if (siglogApplyRef) siglogApplyRef();
+    });
+  })();
 })();
 </script>
 """
@@ -750,24 +843,22 @@ def build_html(root: Path) -> str:
     demo_trade_rows  = [r for r in trade_rows if r.get("mode") == "demo"]
     real_trade_rows  = [r for r in trade_rows if r.get("mode") == "live"]
 
-    def _paper_equity_summary(state: dict | None, rows: list[dict], root: Path) -> str:
+    def _paper_equity_summary(
+        state: dict | None,
+        rows: list[dict],
+        root: Path,
+        *,
+        skip_if_parallel: bool = False,
+    ) -> str:
+        """Single-table equity (paper-only mode or CSV fallback). Empty when skip_if_parallel (demo uses split tables)."""
         strategy_ids = _paper_strategy_ids(root)
-        has_parallel = bool(
-            state and isinstance(state, dict) and any(
-                isinstance(state.get(f"{sid}_paper"), dict) for sid in strategy_ids
-            )
-        )
-        if has_parallel:
-            lines = [
-                "<table><thead><tr>"
-                "<th>Strategy</th><th>Demo-path equity</th><th>Return vs 1.0</th><th>Position</th>"
-                "<th>Parallel paper equity</th><th>Return vs 1.0</th><th>Position</th>"
-                "</tr></thead><tbody>"
-            ]
-        else:
-            lines = [
-                "<table><thead><tr><th>Strategy</th><th>Simulated equity</th><th>Return vs 1.0</th><th>Position</th></tr></thead><tbody>"
-            ]
+        if skip_if_parallel:
+            return ""
+        lines = [
+            '<table class="equity-table"><thead><tr>'
+            '<th>Strategy</th><th>Simulated equity</th><th>Return</th><th>Position</th>'
+            "</tr></thead><tbody>",
+        ]
         # Show all strategies from run_live_tick so new strategies appear even before first tick
         if state and isinstance(state, dict):
             for sid in sorted(strategy_ids):
@@ -780,40 +871,16 @@ def build_html(root: Path) -> str:
                     pos = str(st.get("position", "flat"))
                 except (TypeError, ValueError):
                     eq, pct, pos = 1.0, 0.0, "?"
-                if has_parallel:
-                    stp = state.get(f"{sid}_paper") or {}
-                    if not isinstance(stp, dict):
-                        stp = {"position": "flat", "equity": 1.0}
-                    try:
-                        eqp = float(stp.get("equity", 1.0))
-                        pctp = (eqp - 1.0) * 100
-                        posp = str(stp.get("position", "flat"))
-                    except (TypeError, ValueError):
-                        eqp, pctp, posp = 1.0, 0.0, "?"
-                    lines.append(
-                        f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
-                        f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td>"
-                        f"<td>{eqp:.6f}</td><td>{pctp:+.4f}%</td><td>{_html_escape(posp)}</td></tr>"
-                    )
-                else:
-                    lines.append(
-                        f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
-                        f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
-                    )
-            lines.append("</tbody></table>")
-            note = ""
-            if has_parallel:
-                note = (
-                    "<p class=\"desc\">Demo-path: book updated with demo fills. Parallel paper: "
-                    "independent dry run on the same bar when <code>RUN_LIVETICK_PARALLEL_PAPER_SIM</code> "
-                    "is set with demo broker.</p>"
+                lines.append(
+                    f"<tr><td>{_html_escape(sid)}</td><td>{eq:.6f}</td>"
+                    f"<td>{pct:+.4f}%</td><td>{_html_escape(pos)}</td></tr>"
                 )
-            return "".join(lines) + note
+            lines.append("</tbody></table>")
+            return "".join(lines)
         if trade_err:
             return ""
         strategy_ids = _paper_strategy_ids(root)
         if not any("sim_equity" in r for r in rows):
-            # No state file and no sim_equity in CSV: show all strategies with defaults
             for sid in sorted(strategy_ids):
                 lines.append(
                     f"<tr><td>{_html_escape(sid)}</td><td>1.000000</td>"
@@ -850,7 +917,24 @@ def build_html(root: Path) -> str:
         lines.append("</tbody></table>")
         return "".join(lines)
 
-    paper_equity_html = _paper_equity_summary(paper_state, trade_rows, root)
+    _ids_for_parallel = _paper_strategy_ids(root)
+    has_parallel_state = bool(
+        paper_state and isinstance(paper_state, dict) and any(
+            isinstance(paper_state.get(f"{sid}_paper"), dict) for sid in _ids_for_parallel
+        )
+    )
+    demo_path_equity_html = (
+        _equity_table_from_state(paper_state, root, key_suffix=None) if paper_state else ""
+    )
+    parallel_paper_equity_html = (
+        _equity_table_from_state(paper_state, root, key_suffix="_paper") if has_parallel_state else ""
+    )
+    paper_sim_equity_html = _paper_equity_summary(
+        paper_state, trade_rows, root, skip_if_parallel=has_parallel_state and is_demo
+    )
+    demo_equity_block = demo_path_equity_html or (
+        paper_sim_equity_html if not has_parallel_state else ""
+    )
 
     def _is_order_row(r: dict) -> bool:
         at = str(r.get("action_taken", "")).strip().upper()
@@ -864,9 +948,10 @@ def build_html(root: Path) -> str:
             return f"<p>{empty_msg}</p>"
         return _render_orders_filter_block(order_rows[-200:], table_id)
 
+    paper_parallel_rows, paper_main_sim_rows = _split_sim_order_rows(paper_trade_rows)
     paper_orders_html = _orders_html(
-        paper_trade_rows,
-        "No paper orders yet — strategies stay flat on most bars; open/close/reverse rows appear here when filters pass.",
+        paper_parallel_rows if is_demo else paper_trade_rows,
+        "No parallel paper orders yet — independent dry-run rows use strategy_id ending in _paper when demo + parallel sim is enabled.",
         "ordpaper",
     )
     demo_orders_html = _orders_html(
@@ -904,37 +989,51 @@ def build_html(root: Path) -> str:
     # ── collapsible execution blocks ─────────────────────────────────────────
     _paper_open = "" if is_demo else " open"
     _demo_open  = " open" if is_demo else ""
-    _equity_note_demo = '<p class="desc">Equity is tracked under the Demo broker section when demo mode is active.</p>'
-    _equity_note_paper = '<p class="desc">Equity is tracked under the Paper simulation section when paper mode is active.</p>'
+
+    _paper_parallel_section = ""
+    if is_demo:
+        _paper_parallel_section = (
+            "<h3>Parallel paper equity <span class=\"badge badge-sim\">SIMULATION</span></h3>"
+            "<p class=\"desc\">Independent dry-run book per strategy (state keys <code>{id}_paper</code>). "
+            "Same bar as demo; no broker orders. Compare to demo-path equity in the section above.</p>"
+            + (
+                parallel_paper_equity_html
+                or '<p class="desc">No <code>*_paper</code> keys in state — set RUN_LIVETICK_PARALLEL_PAPER_SIM with demo broker.</p>'
+            )
+        )
 
     paper_block_html = f"""<details{_paper_open}>
-<summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — current equity and orders (latest 100)</summary>
+<summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — parallel paper equity and orders</summary>
 <section>
-<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>
-<p class="desc">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged.
-While long or short, each 5-minute bar applies that bar's return.
-Opens/closes follow the model's <strong>action</strong>; state is saved between ticks so position carries forward.
-Reset by deleting <code>data/logs/execution/paper_sim_state.json</code> (and optionally the CSVs).</p>
-{"" if is_demo else paper_equity_html}
-{_equity_note_demo if is_demo else ""}
+{"" if is_demo else (
+    '<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>'
+    '<p class="desc">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged. '
+    'While long or short, each bar applies that bar\'s return. Reset via <code>paper_sim_state.json</code> or the reset script.</p>'
+    + paper_sim_equity_html
+)}
+{_paper_parallel_section if is_demo else ""}
 <h3>Orders <span class="badge badge-sim">SIMULATION</span></h3>
-<p class="desc">Only bars where the bot would have placed or changed a position (no <code>NONE</code> rows).
-Full per-tick history is in the Signal log above.</p>
+<p class="desc">Parallel paper only: <code>strategy_id</code> ends with <code>_paper</code> (mode=sim). Full signal history is in the log above.</p>
 {paper_orders_html}
 </section>
 </details>"""
 
+    _demo_count_note = (
+        '<p class="desc">Why parallel paper rows can outnumber demo: strategies share <strong>one</strong> demo account. '
+        "After the first strategy opens a position, <code>process_signal</code> often skips others "
+        "(<code>already_long</code> / <code>already_short</code>). Parallel paper uses a separate book per strategy, "
+        "so each can log.</p>"
+    )
+
     demo_block_html = f"""<details{_demo_open}>
-<summary><strong>Demo broker</strong> <span class="badge badge-demo">DEMO</span> — current equity and orders (latest 100)</summary>
+<summary><strong>Demo broker</strong> <span class="badge badge-demo">DEMO</span> — demo-path equity and orders</summary>
 <section>
-<h3>Current equity <span class="badge badge-demo">DEMO</span></h3>
-<p class="desc">Orders are sent to the configured demo account (cTrader/OANDA/Binance); no real money.
-Position is read from the broker; equity is tracked locally starting at 1.0.
-State is saved in <code>paper_sim_state.json</code> (shared with paper sim).</p>
-{paper_equity_html if is_demo else _equity_note_paper}
+<h3>Demo-path equity <span class="badge badge-demo">DEMO</span></h3>
+<p class="desc">Per-strategy book after each demo fill (shared account position for skip logic). State file: <code>paper_sim_state.json</code>.</p>
+{demo_equity_block or '<p class="desc">No equity state yet — run livetick or check state file.</p>'}
 <h3>Orders <span class="badge badge-demo">DEMO</span></h3>
-<p class="desc">Orders placed or changed on the demo broker account. <code>NONE</code> rows are suppressed.
-Latest 200 rows; use filters to narrow by strategy or action.</p>
+{_demo_count_note}
+<p class="desc">Real demo fills only (mode=demo). Latest 200 rows; use filters.</p>
 {demo_orders_html}
 </section>
 </details>"""
@@ -1044,6 +1143,12 @@ details > section, details > .details-body {{ padding: 0.75rem 1rem; }}
     padding: 0.28rem 0.45rem; font-size: 0.82rem; margin-left: 0.25rem; max-width: 14rem; }}
 .filter-count {{ font-size: 0.78rem; color: #888; margin-left: 0.25rem; }}
 .filterable-table {{ margin-top: 0.25rem; }}
+.equity-table {{ margin: 0.4rem 0 0.85rem 0; width: 100%; max-width: 56rem; }}
+.equity-table th, .equity-table td {{ font-variant-numeric: tabular-nums; }}
+.siglog-collapse-bar {{ margin: 0.35rem 0 0.75rem 0; }}
+.siglog-expand-btn {{ background: #2a2a2a; color: #e8e8e8; border: 1px solid #555; border-radius: 3px;
+  padding: 0.35rem 0.75rem; cursor: pointer; font-size: 0.82rem; }}
+.siglog-expand-btn:hover {{ background: #333; }}
 </style>
 </head>
 <body>
@@ -1068,8 +1173,8 @@ Expand a card to see its technique, live parameters, and last-tick stats.</p>
 <p class="desc">Every time the live tick runs, each strategy evaluates the latest bar and records what it <em>would</em> do{"." if not is_demo else ", and sends an order to the demo broker account."}</p>
 
 <section>
-<h3>Signal log — latest {DASHBOARD_PREDICTIONS_LIMIT} rows</h3>
-<p class="desc">One row per strategy per tick. <strong>timestamp</strong> is the <em>bar close time</em> in the data (not necessarily &quot;now&quot;).
+<h3>Signal log — newest {DASHBOARD_SIGNAL_LOG_CAP} of {DASHBOARD_PREDICTIONS_LIMIT} loaded</h3>
+<p class="desc">Shows the latest {DASHBOARD_SIGNAL_LOG_CAP} rows (newest 10 visible by default; use the button for older rows in that window). One row per strategy per tick. <strong>timestamp</strong> is the <em>bar close time</em> in the data (not necessarily &quot;now&quot;).
 <strong>bar_lag_hours</strong> = hours between that bar and when the tick ran (large = stale features — run data refresh).
 <strong>signal_source</strong>: <code>test_csv_tail</code> = classifier last bar; <code>regression_features_tail</code> = regression last bar + live model prediction; <code>replay_predictions</code> only if <code>REGRESSION_LIVE_USE_FEATURE_TAIL = False</code> in config.
 <strong>run_at</strong> = wall-clock UTC when the job ran.
