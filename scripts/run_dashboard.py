@@ -1002,15 +1002,20 @@ def build_html(root: Path) -> str:
             )
         )
 
+    # Built outside f-string: nested quotes/backslashes inside {...} break Python's f-string parser.
+    _paper_sim_only_equity_block = ""
+    if not is_demo:
+        _paper_sim_only_equity_block = (
+            '<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>'
+            '<p class="desc">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged. '
+            "While long or short, each bar applies that bar's return. Reset via <code>paper_sim_state.json</code> or the reset script.</p>"
+            + paper_sim_equity_html
+        )
+
     paper_block_html = f"""<details{_paper_open}>
 <summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — parallel paper equity and orders</summary>
 <section>
-{"" if is_demo else (
-    '<h3>Current equity <span class="badge badge-sim">SIMULATION</span></h3>'
-    "<p class=\"desc\">Each strategy keeps its own simulated account starting at 1.0. While flat, equity is unchanged. "
-    "While long or short, each bar applies that bar's return. Reset via <code>paper_sim_state.json</code> or the reset script.</p>"
-    + paper_sim_equity_html
-)}
+{_paper_sim_only_equity_block}
 {_paper_parallel_section if is_demo else ""}
 <h3>Orders <span class="badge badge-sim">SIMULATION</span></h3>
 <p class="desc">Parallel paper only: <code>strategy_id</code> ends with <code>_paper</code> (mode=sim). Full signal history is in the log above.</p>
