@@ -1,0 +1,3 @@
+strategy,mode,ma_window,resample,cum_ret,profit_factor,max_dd,n_trades,positive_months,total_months,pct_positive_months
+regression_v1,baseline,20,1h,-0.172868,1.0809,0.192234,2894,12,27,44.4
+regression_v1,strict_trend,20,1h,0.048179,1.3264,0.056743,1358,16,27,59.3

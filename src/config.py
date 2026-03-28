@@ -109,6 +109,23 @@ MR_PAUSE_BARS: int = 72            # resume after 72 bars (= 6 hours at 5-min ba
 CLASSIFIER_MAX_BAR_AGE_MINUTES: int = 20
 REGRESSION_MAX_BAR_AGE_MINUTES: int = 20
 
+# Session Breakout strategy v1 — rule-based, no ML
+SB_N_LOOKBACK: int = 12              # 12 × 5min = 60 min rolling range window
+SB_HOLD_BARS: int = 12               # force close after 60 min (12 bars)
+SB_MIN_RANGE_SIZE: float = 0.0003    # min 3 pip range — skip flat/choppy bars
+SB_MAX_BAR_AGE_MINUTES: int = 20
+SB_VOL_PCT: int = 0                  # 0 = disabled for initial paper testing
+SB_KILL_SWITCH_N: int = 20
+SB_KILL_SWITCH_PF: float = 0.9
+SB_DD_KILL: float = 0.02
+SB_PAUSE_BARS: int = 72
+
+# Session Breakout v2 — Opening Range Breakout (ORB) research defaults
+SB2_OR_MINUTES: int = 30         # opening range window length in minutes
+SB2_ENTRY_BUFFER: float = 0.0    # extra buffer beyond OR boundary (0 = no buffer)
+SB2_HOLD_BARS: int = 12          # bars to hold before forced close
+SB2_ENTRY_CUTOFF_BARS: int = 18  # max bars after OR closes to accept an entry
+
 # Regression experiment (Batch 1) — multi-horizon return targets, no Chronos/TimesFM
 REGRESSION_HORIZONS = [3, 6, 12]  # bars ahead for target_ret_h
 
@@ -139,3 +156,34 @@ REGRESSION_KILL_SWITCH_PF: float = 0.9  # pause if rolling PF of last 20 trades 
 # Risk controls — drawdown kill
 REGRESSION_DD_KILL: float = 0.02        # pause when drawdown from equity peak exceeds 2%
 REGRESSION_PAUSE_BARS: int = 72         # resume after 72 bars (= 6 hours at 5-min bars)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# regression_v2_trendfilter — research candidate, paper-trade alongside v1
+#
+# Same prediction model and selection logic as regression_v1, with one extra gate:
+# a higher-timeframe trend filter that only allows long entries in uptrend and
+# short entries in downtrend.
+#
+# Research validation (data/validation/):
+#   trend_filter_sweep.csv :   4h MA10 PF 1.60 vs baseline 1.08  (best single config)
+#   trend_filter_stability.csv: ALL MA windows 5–40 beat baseline (plateau, not spike)
+#   trend_filter_walkforward.csv: 14/27 months improved; positive months 44%→59%
+#   trend_filter_cost_stress.csv: filtered at 2× cost still beats unfiltered at 1×
+#   trend_filter_sweep.csv :   4h MA10 positive months 63% vs baseline 44%
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Trend filter gate
+RV2_TREND_RESAMPLE: str = "4h"   # resample period for HTF trend bar (4-hour bars)
+RV2_TREND_MA_WINDOW: int = 10    # MA window on HTF bars — MA10 on 4h = ~40-hour trend
+
+# Selection — same thresholds as regression_v1 for direct comparison
+RV2_TOP_PCT: float = 1.0          # trade top/bottom 1% of predictions (wider than v1 to
+                                   # give trend filter enough trades to work with)
+RV2_VOL_PCT: int = 30             # trade only when vol_6 in top 30%
+RV2_PRED_THRESHOLD: float = 0.0   # no minimum |pred| filter (trend gate is the primary filter)
+
+# Risk controls — identical to regression_v1
+RV2_KILL_SWITCH_N: int = 20
+RV2_KILL_SWITCH_PF: float = 0.9
+RV2_DD_KILL: float = 0.02
+RV2_PAUSE_BARS: int = 72

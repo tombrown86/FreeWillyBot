@@ -45,9 +45,12 @@ from src.config import (
 )
 
 STRATEGIES = [
-    {"id": "classifier_v1", "module": "src.live_signal", "fn": "run"},
-    {"id": "regression_v1", "module": "src.live_signal_regression", "fn": "run"},
-    {"id": "mean_reversion_v1", "module": "src.live_signal_mean_reversion", "fn": "run"},
+    {"id": "classifier_v1",              "module": "src.live_signal",                           "fn": "run"},
+    {"id": "regression_v1",              "module": "src.live_signal_regression",                "fn": "run"},
+    {"id": "mean_reversion_v1",          "module": "src.live_signal_mean_reversion",            "fn": "run"},
+    {"id": "regression_v2_trendfilter",  "module": "src.live_signal_regression_v2_trendfilter", "fn": "run"},
+    # session_breakout_v1 disabled 2026-03: 27/27 parameter combos losing, structural rejection
+    # {"id": "session_breakout_v1", "module": "src.live_signal_session_breakout", "fn": "run"},
 ]
 
 PAPER_STATE_PATH = PROJECT_ROOT / "data" / "logs" / "execution" / "paper_sim_state.json"

@@ -1,0 +1,7 @@
+mode,cost_mult,cost_pips,profit_factor,cum_ret,max_dd,n_trades,positive_months,total_months
+baseline,1.0,1.0,1.0809,-0.172868,0.192234,2894,12,27
+baseline,1.5,1.5,1.0809,-0.290725,0.296374,2894,9,27
+baseline,2.0,2.0,1.0809,-0.391794,0.394583,2894,8,27
+strict_trend_MA20,1.0,1.0,1.3264,0.048179,0.056743,1358,16,27
+strict_trend_MA20,1.5,1.5,1.3264,-0.020639,0.08647,1358,11,27
+strict_trend_MA20,2.0,2.0,1.3264,-0.084941,0.115813,1358,11,27

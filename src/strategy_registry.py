@@ -230,6 +230,140 @@ STRATEGIES: list[StrategyEntry] = [
             ParamSpec("MACRO_EVENT_BLACKOUT_MIN","Event blackout",    "min",   "No trades within ± N min of a scheduled macro release"),
         ],
     ),
+
+    # ── 4. session_breakout_v1 ────────────────────────────────────────────────
+    StrategyEntry(
+        id="session_breakout_v1",
+        name="Rule-based session breakout (session_breakout_v1)",
+        active=False,   # DISABLED — structural failure confirmed in research (2026-03)
+        module="src.live_signal_session_breakout",
+        signal_source_key="session_breakout_price_tail",
+        config_locked=False,
+        technique="Rule-based — rolling N-bar high/low breakout at session opens",
+
+        plain_description=(
+            "No machine learning — pure price logic. "
+            "At the London open (07:00–10:00 UTC) and NY open (12:00–15:00 UTC), "
+            "this strategy watches whether EUR/USD price breaks above or below the range "
+            "it has traded over the last hour. A break upward triggers a BUY; "
+            "a break downward triggers a SELL. "
+            "The position is held for up to 60 minutes then automatically closed. "
+            "At most one trade per session per day."
+        ),
+        technical_description=(
+            "Data source: EURUSD_5min_clean.parquet (raw OHLC — independent from features_regression_core). "
+            "Signal: range_high = rolling(SB_N_LOOKBACK).max().shift(1); range_low analogous. "
+            "BUY when close &gt; range_high; SELL when close &lt; range_low. "
+            "Filters: (1) in-session — London 07–10 UTC or NY 12–15 UTC; "
+            "(2) range_size &gt; SB_MIN_RANGE_SIZE (avoids flat/noise bars); "
+            "(3) once-per-session guard (last_session_id in state.json prevents re-entry). "
+            "Exit: forced close after SB_HOLD_BARS bars. "
+            "Guards: stale-bar, macro event blackout, daily loss cap, kill switch, DD kill. "
+            "No ML — fully deterministic and independently auditable. "
+            "Completely separate edge from mean_reversion_v1 (momentum vs reversion)."
+        ),
+        best_conditions=(
+            "London or NY session opens with clear directional momentum · "
+            "Range large enough to be meaningful (> SB_MIN_RANGE_SIZE) · "
+            "Trending intraday environment — breakouts follow through"
+        ),
+        known_weaknesses=(
+            "Choppy / range-bound markets generate false breakouts · "
+            "Only 1–2 trades per day by design — low frequency · "
+            "Momentum reversal immediately after session open can cause quick losses"
+        ),
+        params=[
+            ParamSpec("SB_N_LOOKBACK",           "Range window",       "bars",  "Rolling bars used to define the breakout range (N × 5min = lookback window in minutes)"),
+            ParamSpec("SB_HOLD_BARS",             "Hold bars",          "bars",  "Force-close the position after this many bars regardless of P&L"),
+            ParamSpec("SB_MIN_RANGE_SIZE",        "Min range",          "price", "Skip bars where the rolling range is smaller than this — avoids flat/choppy markets"),
+            ParamSpec("SB_VOL_PCT",               "Vol gate",           "%",     "Trade only when vol_6 is in the top N% (0 = disabled)"),
+            ParamSpec("SB_KILL_SWITCH_N",         "Kill-switch window", "trades","Evaluate rolling profit factor after every N completed trades"),
+            ParamSpec("SB_KILL_SWITCH_PF",        "Kill-switch PF min", "",      "Pause trading if rolling profit factor drops below this"),
+            ParamSpec("SB_DD_KILL",               "Drawdown kill",      "frac",  "Pause when equity drops more than this fraction from its peak"),
+            ParamSpec("SB_PAUSE_BARS",            "Pause duration",     "bars",  "Bars to stay paused after a kill-switch fires"),
+            ParamSpec("SB_MAX_BAR_AGE_MINUTES",   "Max bar age",        "min",   "Block trade if the latest bar is older than this — stale data guard"),
+            ParamSpec("MACRO_EVENT_BLACKOUT_MIN", "Event blackout",     "min",   "No trades within ± N min of a scheduled macro release"),
+        ],
+    ),
+    # ── 5. regression_v2_trendfilter ─────────────────────────────────────────
+    StrategyEntry(
+        id="regression_v2_trendfilter",
+        name="ML regression + 4h trend filter (regression_v2_trendfilter)",
+        active=True,
+        module="src.live_signal_regression_v2_trendfilter",
+        signal_source_key="regression_v2_trendfilter_features_tail",
+        config_locked=False,
+        technique="ML regression (LightGBM) + rule-based 4-hour MA10 trend filter",
+
+        plain_description=(
+            "The same machine-learning prediction model as regression_v1, but with an extra layer: "
+            "a 4-hour trend filter that only allows <em>long trades when the 4-hour chart is in an "
+            "uptrend</em> and <em>short trades when it is in a downtrend</em> (measured by whether "
+            "the 4-hour closing price is above or below a 10-bar moving average). "
+            "This prevents the model from fighting the higher-timeframe momentum — the most common "
+            "source of losses in regression_v1. "
+            "Running in paper alongside regression_v1 to measure live improvement."
+        ),
+        technical_description=(
+            "Same LightGBM regressor as regression_v1 (trained 2022-01-01 – 2023-09-30, "
+            "target: 6-bar log-return). Same signal selection stack: prediction percentile "
+            "≤ top/bottom RV2_TOP_PCT%; |pred| ≥ RV2_PRED_THRESHOLD; vol_6 in top RV2_VOL_PCT%. "
+            "<br><br>"
+            "<strong>Additional 4h trend gate</strong>: before any position change, "
+            "compute the 4-hour close MA(RV2_TREND_MA_WINDOW) from EURUSD_5min_clean.parquet "
+            "resampled to 4h bars (last close of each 4h candle). "
+            "Gate rule: long entries pass only when close_4h &gt; MA_4h; "
+            "short entries pass only when close_4h &lt; MA_4h. "
+            "Blocked bars are logged with reason='trend_filter'. "
+            "Live output includes trend_label (up/down/neutral/warmup) and trend_strength "
+            "(close_4h / MA_4h − 1) for every bar. "
+            "<br><br>"
+            "<strong>Research validation</strong> (data/validation/trend_filter_*.csv):<br>"
+            "• Sweep: 4h MA10 PF 1.60 vs baseline 1.08; cum return +17.5% vs −17.3%<br>"
+            "• Stability: all MA windows 5–40 beat baseline (confirmed plateau, not spike)<br>"
+            "• Walk-forward: 14/27 months improved; positive months 44% → 63%<br>"
+            "• Cost stress: filtered at 2× spread still beats unfiltered at 1×<br>"
+            "• Max drawdown: 3.8% vs 19.2% baseline — filter cuts worst drawdown by 80%<br>"
+            "<br>"
+            "Risk controls identical to regression_v1: kill-switch (rolling PF of last "
+            "RV2_KILL_SWITCH_N trades &lt; RV2_KILL_SWITCH_PF), drawdown kill "
+            "(equity drop &gt; RV2_DD_KILL from peak), both pause for RV2_PAUSE_BARS bars. "
+            "<br><br>"
+            "Note: RV2_TOP_PCT=1.0 is wider than v1's 0.25% to give the trend filter enough "
+            "candidate trades — the filter itself provides the primary selectivity. "
+            "Validated on the same test period (Jan 2024 – Mar 2026). "
+            "Promoted from research to paper-trade after passing all 4 validation gates: "
+            "sweep, walk-forward, cost-stress, stability."
+        ),
+        best_conditions=(
+            "Clear 4h directional trend (price well above/below 4h MA10) · "
+            "High-volatility London/NY session · "
+            "Trending days — the filter deliberately avoids choppy/ranging environments · "
+            "No scheduled macro events within 30 min"
+        ),
+        known_weaknesses=(
+            "Trend reversals: when the 4h trend flips, in-flight positions can be closed "
+            "early while the underlying model signal may still be valid · "
+            "Fewer trades than v1 (~50% of v1 trade count) — lower throughput means "
+            "equity curve builds slowly and kill-switch needs more time to gather evidence · "
+            "4h MA10 computed from offline price file — same warmup limitation as any MA "
+            "(first ~40 hours of data have no trend signal, treated as pass-through) · "
+            "If 4h trend is neutral (close == MA exactly) entry is allowed — rare but possible"
+        ),
+        params=[
+            ParamSpec("RV2_TREND_RESAMPLE",   "HTF period",         "",      "Resample period for higher-timeframe bars used in the trend filter (4h = four 1-hour candles)"),
+            ParamSpec("RV2_TREND_MA_WINDOW",  "Trend MA window",    "bars",  "Moving average window on 4-hour bars — MA10 on 4h ≈ 40-hour trend signal"),
+            ParamSpec("RV2_TOP_PCT",          "Percentile gate",    "%",     "Trade top/bottom N% of predictions — wider than v1 (1% vs 0.25%) because trend filter provides primary selectivity"),
+            ParamSpec("RV2_VOL_PCT",          "Vol gate",           "%",     "Trade only when vol_6 in top N% — same purpose as v1 vol gate"),
+            ParamSpec("RV2_PRED_THRESHOLD",   "Min |pred|",         "",      "Minimum absolute prediction to trade (0 = disabled — trend gate is the primary filter)"),
+            ParamSpec("RV2_KILL_SWITCH_N",    "Kill-switch window", "trades","Evaluate rolling profit factor after every N completed trades"),
+            ParamSpec("RV2_KILL_SWITCH_PF",   "Kill-switch PF min", "",      "Pause trading if rolling PF of last N trades drops below this"),
+            ParamSpec("RV2_DD_KILL",          "Drawdown kill",      "frac",  "Pause when equity drops more than this fraction from its peak"),
+            ParamSpec("RV2_PAUSE_BARS",       "Pause duration",     "bars",  "Bars to stay paused after a kill-switch fires (72 bars = 6 h at 5-min bars)"),
+            ParamSpec("MACRO_EVENT_BLACKOUT_MIN", "Event blackout", "min",   "No trades within ± N min of a scheduled macro release (shared with all strategies)"),
+        ],
+    ),
+
 ]
 
 # Fast lookup by id
