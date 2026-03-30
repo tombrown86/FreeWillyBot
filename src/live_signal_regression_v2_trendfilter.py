@@ -51,11 +51,21 @@ from src.trend_filter import compute_trend_mask
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _paths_for(strategy_id: str) -> tuple[Path, Path]:
+    base = PROJECT_ROOT / "data" / "logs" / "execution"
+    return base / f"{strategy_id}_state.json", base / f"{strategy_id}_cursor.json"
+
+
 STRATEGY_ID = "regression_v2_trendfilter"
-STATE_FILE  = PROJECT_ROOT / "data" / "logs" / "execution" / "regression_v2_trendfilter_state.json"
-CURSOR_FILE = PROJECT_ROOT / "data" / "logs" / "execution" / "regression_v2_trendfilter_cursor.json"
+STATE_FILE, CURSOR_FILE = _paths_for(STRATEGY_ID)
 PREDICTIONS_PATH = PROJECT_ROOT / "data" / "predictions_regression" / "test_predictions.parquet"
 MACRO_EVENTS_PATH = PROJECT_ROOT / "data" / "raw" / "macro" / "event_calendar.csv"
+
+
+def state_paths_for(strategy_id: str | None = None) -> tuple[Path, Path]:
+    """State and cursor paths for a strategy id (default: regression_v2_trendfilter)."""
+    return _paths_for(strategy_id or STRATEGY_ID)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -107,12 +117,12 @@ def _default_state() -> dict:
     }
 
 
-def _load_state() -> dict:
+def _load_state(state_file: Path) -> dict:
     import json
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if STATE_FILE.exists():
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    if state_file.exists():
         try:
-            with open(STATE_FILE) as f:
+            with open(state_file) as f:
                 raw = json.load(f)
             default = _default_state()
             for k, v in default.items():
@@ -123,35 +133,41 @@ def _load_state() -> dict:
     return _default_state()
 
 
-def _save_state(state: dict) -> None:
+def _save_state(state: dict, state_file: Path) -> None:
     import json
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(state_file, "w") as f:
         json.dump(state, f, indent=2)
 
 
-def _load_cursor() -> int:
+def _load_cursor(cursor_file: Path) -> int:
     import json
-    CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if CURSOR_FILE.exists():
+    cursor_file.parent.mkdir(parents=True, exist_ok=True)
+    if cursor_file.exists():
         try:
-            with open(CURSOR_FILE) as f:
+            with open(cursor_file) as f:
                 return int(json.load(f).get("cursor", 0))
         except Exception:
             pass
     return 0
 
 
-def _save_cursor(cursor: int) -> None:
+def _save_cursor(cursor: int, cursor_file: Path) -> None:
     import json
-    CURSOR_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(CURSOR_FILE, "w") as f:
+    cursor_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cursor_file, "w") as f:
         json.dump({"cursor": cursor}, f)
 
 
 # ── Trend gate ────────────────────────────────────────────────────────────────
 
-def _get_trend_state(bar_ts: pd.Timestamp, resample: str, ma_window: int) -> dict:
+def _get_trend_state(
+    bar_ts: pd.Timestamp,
+    resample: str,
+    ma_window: int,
+    *,
+    strategy_id: str,
+) -> dict:
     """Return trend state for a single bar timestamp.
 
     Returns a dict with keys:
@@ -180,7 +196,7 @@ def _get_trend_state(bar_ts: pd.Timestamp, resample: str, ma_window: int) -> dic
             label = "neutral"
         return {"trend_up": up, "trend_down": down, "trend_strength": strength, "trend_label": label}
     except Exception as e:
-        logging.warning("[%s] Trend state lookup failed: %s — passing (no gate)", STRATEGY_ID, e)
+        logging.warning("[%s] Trend state lookup failed: %s — passing (no gate)", strategy_id, e)
         return {"trend_up": True, "trend_down": True, "trend_strength": 0.0, "trend_label": "error"}
 
 
@@ -199,6 +215,7 @@ def _one_bar_output_v2(
     all_vol: np.ndarray,
     idx_label: str,
     signal_source: str,
+    strategy_id: str,
 ) -> dict:
     blocked = False
     reason = ""
@@ -225,6 +242,7 @@ def _one_bar_output_v2(
         bar_ts,
         resample=cfg["trend_resample"],
         ma_window=cfg["trend_ma_window"],
+        strategy_id=strategy_id,
     )
     trend_blocked = False
     if not blocked and trend["trend_label"] not in ("error", "warmup"):
@@ -250,7 +268,7 @@ def _one_bar_output_v2(
         if state["pause_remaining"] <= 0:
             state["paused"] = False
             state["pause_remaining"] = 0
-            logging.info("[%s] Resuming after pause (%s)", STRATEGY_ID, idx_label)
+            logging.info("[%s] Resuming after pause (%s)", strategy_id, idx_label)
 
     if state["paused"]:
         blocked = True
@@ -319,7 +337,7 @@ def _one_bar_output_v2(
         rdy = 100
 
     return {
-        "strategy_id":       STRATEGY_ID,
+        "strategy_id":       strategy_id,
         "timestamp":         ts_str,
         "signal":            signal,
         "action":            action,
@@ -343,38 +361,40 @@ def _one_bar_output_v2(
 
 # ── Run entry point ───────────────────────────────────────────────────────────
 
-def run(n_bars: int = 1) -> list[dict]:
+def run(n_bars: int = 1, *, strategy_id: str | None = None) -> list[dict]:
     from src.config import REGRESSION_LIVE_USE_FEATURE_TAIL
+    sid = strategy_id or STRATEGY_ID
     if REGRESSION_LIVE_USE_FEATURE_TAIL:
-        return _run_feature_tail(n_bars)
-    return _run_replay(n_bars)
+        return _run_feature_tail(n_bars, strategy_id=sid)
+    return _run_replay(n_bars, strategy_id=sid)
 
 
-def _run_feature_tail(n_bars: int) -> list[dict]:
+def _run_feature_tail(n_bars: int, *, strategy_id: str) -> list[dict]:
     ref = _load_percentile_reference()
     if ref is None:
-        logging.error("[%s] Need test_predictions.parquet for percentile reference", STRATEGY_ID)
+        logging.error("[%s] Need test_predictions.parquet for percentile reference", strategy_id)
         return []
     all_pred, all_vol = ref
 
     model, feature_cols, target_col = _load_regression_model()
     if model is None or feature_cols is None:
-        logging.error("[%s] Missing regression_best.pkl or regression_feature_cols.json", STRATEGY_ID)
+        logging.error("[%s] Missing regression_best.pkl or regression_feature_cols.json", strategy_id)
         return []
 
     df = _load_features_test_df()
     if df is None or df.empty:
-        logging.error("[%s] No features_regression_core test file", STRATEGY_ID)
+        logging.error("[%s] No features_regression_core test file", strategy_id)
         return []
 
     missing = [c for c in feature_cols if c not in df.columns]
     if missing:
-        logging.error("[%s] Feature file missing columns: %s", STRATEGY_ID, missing[:5])
+        logging.error("[%s] Feature file missing columns: %s", strategy_id, missing[:5])
         return []
 
+    state_path, _cursor_path = _paths_for(strategy_id)
     tail = df.tail(max(1, n_bars)).reset_index(drop=True)
     cfg = _load_config()
-    state = _load_state()
+    state = _load_state(state_path)
     output: list[dict] = []
 
     for i in range(len(tail)):
@@ -392,31 +412,33 @@ def _run_feature_tail(n_bars: int) -> list[dict]:
             bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1,
             cfg=cfg, state=state, all_pred=all_pred, all_vol=all_vol,
             idx_label=f"live tail row {i}",
-            signal_source="regression_v2_trendfilter_features_tail",
+            signal_source=f"{strategy_id}_features_tail",
+            strategy_id=strategy_id,
         )
         output.append(out)
 
-    _save_state(state)
+    _save_state(state, state_path)
     return output
 
 
-def _run_replay(n_bars: int) -> list[dict]:
+def _run_replay(n_bars: int, *, strategy_id: str) -> list[dict]:
     if not PREDICTIONS_PATH.exists():
-        logging.error("[%s] test_predictions.parquet not found", STRATEGY_ID)
+        logging.error("[%s] test_predictions.parquet not found", strategy_id)
         return []
 
     df = pd.read_parquet(PREDICTIONS_PATH)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df.sort_values("timestamp").reset_index(drop=True)
 
-    cursor = _load_cursor()
+    state_path, cursor_path = _paths_for(strategy_id)
+    cursor = _load_cursor(cursor_path)
     if cursor >= len(df):
-        logging.warning("[%s] All bars consumed (cursor=%d) — resetting", STRATEGY_ID, cursor)
+        logging.warning("[%s] All bars consumed (cursor=%d) — resetting", strategy_id, cursor)
         cursor = 0
-        _save_cursor(0)
+        _save_cursor(0, cursor_path)
 
     cfg = _load_config()
-    state = _load_state()
+    state = _load_state(state_path)
     all_pred = df["pred"].values.astype(float)
     all_vol = df["vol_6"].fillna(0).values.astype(float)
     output = []
@@ -437,16 +459,19 @@ def _run_replay(n_bars: int) -> list[dict]:
             bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1,
             cfg=cfg, state=state, all_pred=all_pred, all_vol=all_vol,
             idx_label=f"replay idx {idx}",
-            signal_source="regression_v2_trendfilter_replay",
+            signal_source=f"{strategy_id}_replay",
+            strategy_id=strategy_id,
         )
         output.append(out)
 
-    _save_cursor(cursor + len(output))
-    _save_state(state)
+    _save_cursor(cursor + len(output), cursor_path)
+    _save_state(state, state_path)
     return output
 
 
-def reset_state() -> None:
-    _save_cursor(0)
-    _save_state(_default_state())
-    logging.info("[%s] State and cursor reset", STRATEGY_ID)
+def reset_state(strategy_id: str | None = None) -> None:
+    sid = strategy_id or STRATEGY_ID
+    sp, cp = _paths_for(sid)
+    _save_cursor(0, cp)
+    _save_state(_default_state(), sp)
+    logging.info("[%s] State and cursor reset", sid)

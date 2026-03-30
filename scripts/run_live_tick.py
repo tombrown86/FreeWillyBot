@@ -14,6 +14,7 @@ Use after you are happy with paper results.
 
 import csv
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -43,12 +44,37 @@ from src.config import (
     PREDICTIONS_LIVE_CSV,
     TRADE_DECISIONS_CSV,
 )
+from src.portfolio_engine import (  # noqa: E402
+    enrich_signal_desired_position,
+    get_target_position,
+    is_strategy_allowed,
+    load_portfolio_config,
+    load_portfolio_state,
+    record_position_close,
+    record_position_open,
+    record_trade_result,
+    save_portfolio_state,
+)
 
+# Portfolio config loaded once at import time; never mutated at runtime.
+_PORTFOLIO_CFG: dict = load_portfolio_config()
+
+# Price path for realized-vol calculation inside get_target_position / compute_size.
+_PRICE_PARQUET = PROJECT_ROOT / "data" / "processed" / "price" / "EURUSD_5min_clean.parquet"
+
+# Order matters for portfolio batch 5: if any future event-driven strategy is listed in
+# PORTFOLIO_EVENT_STRATEGY_IDS, register it AFTER continuous strategies so the same tick
+# can flatten regression before an event strategy sends orders (see portfolio_engine).
 STRATEGIES = [
     {"id": "classifier_v1",              "module": "src.live_signal",                           "fn": "run"},
     {"id": "regression_v1",              "module": "src.live_signal_regression",                "fn": "run"},
     {"id": "mean_reversion_v1",          "module": "src.live_signal_mean_reversion",            "fn": "run"},
     {"id": "regression_v2_trendfilter",  "module": "src.live_signal_regression_v2_trendfilter", "fn": "run"},
+    {
+        "id": "regression_v2_trendfilter_portfolio_vol",
+        "module": "src.live_signal_regression_v2_trendfilter",
+        "fn": "run",
+    },
     # session_breakout_v1 disabled 2026-03: 27/27 parameter combos losing, structural rejection
     # {"id": "session_breakout_v1", "module": "src.live_signal_session_breakout", "fn": "run"},
 ]
@@ -63,6 +89,24 @@ FEATURES_TEST = PROJECT_ROOT / "data" / "features_regression_core" / "test.parqu
 
 def _default_paper_state() -> dict:
     return {s["id"]: {"position": "flat", "equity": 1.0} for s in STRATEGIES}
+
+
+def _load_recent_closes(n_bars: int = 64) -> "pd.Series | None":
+    """Return the last n_bars close prices for portfolio vol calculation.
+
+    Returns None if the price file is unavailable (engine degrades gracefully).
+    """
+    try:
+        import pandas as _pd
+        df = _pd.read_parquet(
+            _PRICE_PARQUET,
+            columns=["timestamp", "close"],
+        )
+        df["timestamp"] = _pd.to_datetime(df["timestamp"], utc=True)
+        df = df.sort_values("timestamp").tail(n_bars + 1)
+        return df["close"].reset_index(drop=True)
+    except Exception:
+        return None
 
 
 def _normalize_paper_entry(raw: dict) -> dict:
@@ -423,18 +467,66 @@ def _run_strategy(
         # the broker call fails. Without this, _save_state() inside the strategy
         # records e.g. current_position=1 before cTrader is called, and a timeout
         # leaves state and reality permanently out of sync.
-        _sf = getattr(mod, "STATE_FILE", None)
-        if _sf is not None and _sf.exists():
+        _paths_fn = getattr(mod, "state_paths_for", None)
+        if _paths_fn is not None:
             try:
-                state_snapshot = _sf.read_text()
-                state_file_path = _sf
+                sp, _ = _paths_fn(sid)
+                if sp.exists():
+                    state_snapshot = sp.read_text()
+                    state_file_path = sp
             except Exception:
                 pass
+        else:
+            _sf = getattr(mod, "STATE_FILE", None)
+            if _sf is not None and _sf.exists():
+                try:
+                    state_snapshot = _sf.read_text()
+                    state_file_path = _sf
+                except Exception:
+                    pass
 
-        rows = fn(n_bars=1)
+        _call = {"n_bars": 1}
+        if "strategy_id" in inspect.signature(fn).parameters:
+            _call["strategy_id"] = sid
+        rows = fn(**_call)
+        # State snapshot no longer needed for rollback once fn() has returned successfully.
+        # Broker failures below should not undo what the strategy already committed.
+        _signal_fn_succeeded = True
         if not rows:
             logging.warning("[%s] No signal produced", sid)
             return False
+
+        # ── Portfolio engine: permission + sizing ────────────────────────
+        _port_state = load_portfolio_state()
+        _recent_closes = _load_recent_closes(
+            int(_PORTFOLIO_CFG.get("PORTFOLIO_VOL_LOOKBACK_BARS", 64)) + 4
+        )
+
+        for i, row in enumerate(rows):
+            row = dict(row)
+            enrich_signal_desired_position(row)
+            # 1. Permission check — may override row to HOLD
+            _allowed, _block_reason = is_strategy_allowed(
+                sid, row, _port_state, _PORTFOLIO_CFG
+            )
+            if not _allowed:
+                row["blocked"]          = True
+                row["reason"]           = _block_reason
+                row["action"]           = "HOLD"
+                row["signal"]           = "flat"
+                row["desired_position"] = 0
+                row["portfolio_target_units"] = 0.0
+                logging.info("[%s] portfolio blocked: %s", sid, _block_reason)
+            else:
+                # 2. Sizing + signed target (execution layer hint)
+                _tgt = get_target_position(
+                    row, _port_state, _recent_closes, _PORTFOLIO_CFG, strategy_id=sid
+                )
+                row["portfolio_size"]       = _tgt["size_abs"]
+                row["portfolio_target_units"] = _tgt["target_units"]
+                row["portfolio_size_note"]  = _tgt.get("note", "")
+            rows[i] = row
+        # ── end portfolio permission + sizing ────────────────────────────
 
         for row in rows:
             _append_predictions_row(row, run_at, strategy_id=sid)
@@ -521,6 +613,25 @@ def _run_strategy(
                     if bp_new is not None:
                         broker_position_ref["pos"] = bp_new
 
+                # ── Portfolio engine: record open / close ────────────────
+                try:
+                    if sim_pos == "flat" and new_pos in ("long", "short"):
+                        # Position opened — record entry equity and direction
+                        _dir = 1 if new_pos == "long" else -1
+                        _sz  = float(row.get("portfolio_size", 1.0))
+                        record_position_open(_port_state, sid, _dir, _sz)
+                        st["last_open_equity"] = eq_after_bar
+                    elif sim_pos in ("long", "short") and new_pos == "flat":
+                        # Position closed — compute trade return and update portfolio state
+                        _open_eq = float(st.get("last_open_equity") or eq_before)
+                        _trade_ret = float(eq_after_bar - _open_eq) / max(_open_eq, 1e-12)
+                        record_trade_result(_port_state, _trade_ret, sid, _PORTFOLIO_CFG)
+                        record_position_close(_port_state, sid)
+                    save_portfolio_state(_port_state)
+                except Exception as _pe:
+                    logging.warning("[%s] portfolio state update error: %s", sid, _pe)
+                # ── end portfolio engine record ──────────────────────────
+
                 if demo_broker and str(action_taken or "").strip().upper() == "NONE":
                     ma = str(row.get("action", "") or "").strip().upper()
                     br = broker_response or ""
@@ -559,10 +670,11 @@ def _run_strategy(
                 )
         return True
     except Exception as e:
-        # The strategy's _save_state() may have already written an updated position
-        # (e.g. current_position=1) even though the broker call that follows never
-        # succeeded. Restore the pre-run snapshot so the next tick retries correctly.
-        if state_snapshot is not None and state_file_path is not None:
+        # Only restore the pre-run state snapshot if fn() had NOT yet returned
+        # (i.e. the error is from inside the strategy itself before its _save_state call).
+        # If _signal_fn_succeeded is set, the strategy already committed its new state;
+        # rolling that back here would desync state from the paper/demo equity book.
+        if not locals().get("_signal_fn_succeeded") and state_snapshot is not None and state_file_path is not None:
             try:
                 state_file_path.write_text(state_snapshot)
                 logging.warning("[%s] Rolled back strategy state after execution failure", sid)

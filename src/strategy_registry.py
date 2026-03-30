@@ -49,6 +49,10 @@ class StrategyEntry:
     # What can hurt it?
     known_weaknesses: str
 
+    # Expected trade cadence from validation / backtests (dashboard: vs paper & demo)
+    trade_frequency_backtest: str = ""
+    trade_frequency_source: str = ""
+
     # Config parameters to display
     params: list[ParamSpec] = field(default_factory=list)
 
@@ -110,6 +114,12 @@ STRATEGIES: list[StrategyEntry] = [
             "Low-volatility Asian session produces very few signals · "
             "Relies on stationarity of vol/return features — regime changes can temporarily hurt accuracy"
         ),
+        trade_frequency_backtest=(
+            "Roughly ~0.3–1.5 round-turns per day on typical OOS months (high variance; vol/session filters dominate)."
+        ),
+        trade_frequency_source=(
+            "Hold-out & walk-forward regression backtests (data/backtests_regression/); not a guarantee in live."
+        ),
         params=[
             ParamSpec("REGRESSION_TOP_PCT",        "Percentile gate",    "%",     "Only act when prediction is in the extreme top/bottom N% of all-time predictions"),
             ParamSpec("REGRESSION_VOL_PCT",         "Vol gate",           "%",     "Only trade when the 6-bar volatility is in the top N% — filters out quiet/flat markets"),
@@ -162,6 +172,12 @@ STRATEGIES: list[StrategyEntry] = [
             "Bar timestamp is ~60 min behind price (target horizon chop from training pipeline) · "
             "Probability calibration may drift between retrains · "
             "MIN_CONFIDENCE_PCT is close to the model's practical max (~0.54) — very few signals fire"
+        ),
+        trade_frequency_backtest=(
+            "Very low — often well under 0.1 trades/day when confidence gates are tight (many bars = FLAT)."
+        ),
+        trade_frequency_source=(
+            "Classifier validation / backtest reports; live tick signal log confirms sparse BUY/SELL."
         ),
         params=[
             ParamSpec("NO_TRADE_THRESHOLD_PCT",  "Confidence gate",    "",      "Only trade when max(P_buy, P_sell) exceeds this probability"),
@@ -217,6 +233,12 @@ STRATEGIES: list[StrategyEntry] = [
             "z-score threshold tuned on 2022-2024 data; may need recalibration as regime shifts · "
             "30-min forced exit can leave money on the table in slow-reverting environments"
         ),
+        trade_frequency_backtest=(
+            "Session-dependent — often a few round-turns per week in range-bound regimes (not every day)."
+        ),
+        trade_frequency_source=(
+            "Rule-based backtest on historical features; frequency rises in London/NY overlap."
+        ),
         params=[
             ParamSpec("MR_ZSCORE_THRESHOLD",    "Z-score threshold",  "",      "Enter when the gap from the 20-bar MA is this many standard deviations away from its own recent mean"),
             ParamSpec("MR_HOLD_BARS",           "Hold bars",          "bars",  "Force-close the position after this many bars regardless of P&L (30 min at 5-min bars)"),
@@ -271,6 +293,12 @@ STRATEGIES: list[StrategyEntry] = [
             "Choppy / range-bound markets generate false breakouts · "
             "Only 1–2 trades per day by design — low frequency · "
             "Momentum reversal immediately after session open can cause quick losses"
+        ),
+        trade_frequency_backtest=(
+            "Designed for at most ~1–2 trades per London/NY session day (often fewer when range filter fails)."
+        ),
+        trade_frequency_source=(
+            "Session breakout research; disabled in live tick until re-validated."
         ),
         params=[
             ParamSpec("SB_N_LOOKBACK",           "Range window",       "bars",  "Rolling bars used to define the breakout range (N × 5min = lookback window in minutes)"),
@@ -350,6 +378,13 @@ STRATEGIES: list[StrategyEntry] = [
             "(first ~40 hours of data have no trend signal, treated as pass-through) · "
             "If 4h trend is neutral (close == MA exactly) entry is allowed — rare but possible"
         ),
+        trade_frequency_backtest=(
+            "Typically ~0.2–0.8 round-turns per day on the test window — materially fewer than regression_v1 "
+            "because the 4h trend filter blocks many entries."
+        ),
+        trade_frequency_source=(
+            "Trend-filter sweep & validation (data/validation/); walk-forward positive months ~63%."
+        ),
         params=[
             ParamSpec("RV2_TREND_RESAMPLE",   "HTF period",         "",      "Resample period for higher-timeframe bars used in the trend filter (4h = four 1-hour candles)"),
             ParamSpec("RV2_TREND_MA_WINDOW",  "Trend MA window",    "bars",  "Moving average window on 4-hour bars — MA10 on 4h ≈ 40-hour trend signal"),
@@ -361,6 +396,53 @@ STRATEGIES: list[StrategyEntry] = [
             ParamSpec("RV2_DD_KILL",          "Drawdown kill",      "frac",  "Pause when equity drops more than this fraction from its peak"),
             ParamSpec("RV2_PAUSE_BARS",       "Pause duration",     "bars",  "Bars to stay paused after a kill-switch fires (72 bars = 6 h at 5-min bars)"),
             ParamSpec("MACRO_EVENT_BLACKOUT_MIN", "Event blackout", "min",   "No trades within ± N min of a scheduled macro release (shared with all strategies)"),
+        ],
+    ),
+    # ── 5b. regression_v2_trendfilter + portfolio vol-only sizing ─────────────
+    StrategyEntry(
+        id="regression_v2_trendfilter_portfolio_vol",
+        name="ML regression + 4h trend filter, portfolio vol-only sizing",
+        active=True,
+        module="src.live_signal_regression_v2_trendfilter",
+        signal_source_key="regression_v2_trendfilter_portfolio_vol_features_tail",
+        config_locked=False,
+        technique="Same as regression_v2_trendfilter; portfolio layer uses vol targeting only (no trend/DD/streak multipliers)",
+
+        plain_description=(
+            "Identical signals and risk controls to regression_v2_trendfilter. "
+            "The portfolio engine applies only volatility-based position scaling — "
+            "not the full multiplier stack — so live sizing matches the validated "
+            "vol_only backtest profile."
+        ),
+        technical_description=(
+            "Same module and model as regression_v2_trendfilter. "
+            "Separate state/cursor files under "
+            "<code>regression_v2_trendfilter_portfolio_vol_*</code>. "
+            "<code>PORTFOLIO_SIZING_MODE_BY_STRATEGY</code> sets "
+            "<code>vol_only</code> for this id (see <code>src/config_portfolio.py</code>)."
+        ),
+        best_conditions=("Same as regression_v2_trendfilter.",),
+        known_weaknesses=(
+            "Runs as a second strategy id — same directional intent as v2; "
+            "portfolio conflict rules apply if another strategy holds the opposite side.",
+        ),
+        trade_frequency_backtest=(
+            "Same trade cadence as regression_v2_trendfilter (identical signal; sizing differs only)."
+        ),
+        trade_frequency_source=(
+            "Same as v2; portfolio_engine_backtest.csv compares sizing modes on replayed signals."
+        ),
+        params=[
+            ParamSpec("RV2_TREND_RESAMPLE",   "HTF period",         "",      "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_TREND_MA_WINDOW",  "Trend MA window",    "bars",  "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_TOP_PCT",          "Percentile gate",    "%",     "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_VOL_PCT",          "Vol gate",           "%",     "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_PRED_THRESHOLD",   "Min |pred|",         "",      "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_KILL_SWITCH_N",    "Kill-switch window", "trades","Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_KILL_SWITCH_PF",   "Kill-switch PF min", "",      "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_DD_KILL",          "Drawdown kill",      "frac",  "Same as regression_v2_trendfilter"),
+            ParamSpec("RV2_PAUSE_BARS",       "Pause duration",     "bars",  "Same as regression_v2_trendfilter"),
+            ParamSpec("MACRO_EVENT_BLACKOUT_MIN", "Event blackout", "min",   "Same as regression_v2_trendfilter"),
         ],
     ),
 

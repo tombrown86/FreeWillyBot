@@ -16,7 +16,7 @@ import csv
 import html as html_module
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -244,6 +244,251 @@ def load_strategy_registry():
         return STRATEGIES
     except Exception:
         return []
+
+
+def _parse_trade_decision_ts(row: dict) -> datetime | None:
+    """Best-effort parse from trade_decisions.csv row (run_at preferred)."""
+    for key in ("run_at", "timestamp", "bar_close_utc"):
+        raw = row.get(key)
+        if not raw:
+            continue
+        s = str(raw).strip()
+        if not s:
+            continue
+        try:
+            if s.endswith(" UTC"):
+                s = s[:-4].strip()
+            if "T" not in s and " " in s:
+                # "2026-03-30 12:00:00" -> ISO
+                d_part, t_part = s.split(None, 1)
+                s = f"{d_part}T{t_part}"
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def compute_trade_frequency_from_trade_log(trade_rows: list[dict]) -> dict[str, dict[str, dict]]:
+    """Per strategy_id -> mode (sim|demo|live) -> {n, span_days, per_day, first, last}.
+
+    Counts only rows where action_taken is set and not NONE (actual order attempts).
+    """
+    from collections import defaultdict
+
+    raw: dict[tuple[str, str], list[datetime]] = defaultdict(list)
+    for r in trade_rows:
+        at = str(r.get("action_taken", "")).strip().upper()
+        if not at or at == "NONE":
+            continue
+        mode = str(r.get("mode", "sim")).strip().lower()
+        if mode not in ("sim", "demo", "live"):
+            mode = "sim"
+        sid = str(r.get("strategy_id", "")).strip()
+        if not sid:
+            continue
+        ts = _parse_trade_decision_ts(r)
+        if ts is None:
+            continue
+        raw[(sid, mode)].append(ts)
+
+    out: dict[str, dict[str, dict]] = {}
+    for (sid, mode), times in raw.items():
+        times.sort()
+        n = len(times)
+        if n == 0:
+            continue
+        if n == 1:
+            span_days = 1.0
+        else:
+            delta = (times[-1] - times[0]).total_seconds() / 86400.0
+            span_days = max(delta, 1.0 / 24.0)
+        per_day = n / span_days
+        out.setdefault(sid, {})[mode] = {
+            "n": n,
+            "span_days": span_days,
+            "per_day": per_day,
+            "per_month": per_day * 30.44,
+            "first": times[0].strftime("%Y-%m-%d %H:%M UTC"),
+            "last": times[-1].strftime("%Y-%m-%d %H:%M UTC"),
+        }
+    return out
+
+
+def _render_trade_frequency_section(
+    registry: list,
+    live_by_sid: dict[str, dict[str, dict]],
+    *,
+    trade_err: str | None,
+) -> str:
+    """HTML: backtest expectation vs trade_decisions.csv by mode."""
+    intro = (
+        "<p class='desc'><strong>Backtest / validation</strong> — qualitative cadence from research "
+        "(see each strategy card for detail). "
+        "<strong>Paper (sim)</strong> — rows in <code>trade_decisions.csv</code> with <code>mode=sim</code> "
+        "(per-strategy simulated book). "
+        "<strong>Demo</strong> — <code>mode=demo</code> (cTrader demo fills). "
+        "<strong>Live</strong> — <code>mode=live</code> when real execution is enabled. "
+        "Rates use wall-clock span between first and last <em>recorded</em> order in the log (not bar timestamps). "
+        "Parallel dry-run uses <code>strategy_id</code> ending in <code>_paper</code>.</p>"
+    )
+    if trade_err:
+        intro += f"<p class='desc'>{_html_escape(trade_err)}</p>"
+
+    def cell(sid: str, mode: str) -> str:
+        d = (live_by_sid.get(sid) or {}).get(mode)
+        if not d or d.get("n", 0) == 0:
+            return "—"
+        return (
+            f"<strong>{d['per_day']:.2f}/day</strong>"
+            f"<br><span class='desc'>{d['n']} orders · {d['span_days']:.1f}d span</span>"
+        )
+
+    rows_html = ""
+    for entry in registry:
+        bt = (entry.trade_frequency_backtest or "").strip() or "—"
+        src = (entry.trade_frequency_source or "").strip()
+        src_cell = f"{_html_escape(bt)}"
+        if src:
+            src_cell += f"<br><span class='desc'>{_html_escape(src)}</span>"
+        rows_html += (
+            f"<tr><td><code>{_html_escape(entry.id)}</code></td>"
+            f"<td>{src_cell}</td>"
+            f"<td>{cell(entry.id, 'sim')}</td>"
+            f"<td>{cell(entry.id, 'demo')}</td>"
+            f"<td>{cell(entry.id, 'live')}</td></tr>"
+        )
+
+    parallel_rows = ""
+    for sid in sorted(live_by_sid.keys()):
+        if not sid.endswith("_paper"):
+            continue
+        st = live_by_sid[sid]
+        for mode in ("sim", "demo", "live"):
+            d = st.get(mode)
+            if not d:
+                continue
+            parallel_rows += (
+                f"<tr><td><code>{_html_escape(sid)}</code></td><td>{_html_escape(mode)}</td>"
+                f"<td><strong>{d['per_day']:.2f}/day</strong> "
+                f"<span class='desc'>(n={d['n']})</span></td></tr>"
+            )
+
+    parallel_block = ""
+    if parallel_rows:
+        parallel_block = (
+            "<h4>Parallel paper ids (<code>*_paper</code>)</h4>"
+            "<table><thead><tr><th>strategy_id</th><th>mode</th><th>Rate</th></tr></thead><tbody>"
+            + parallel_rows
+            + "</tbody></table>"
+        )
+
+    return (
+        '<section class="trade-freq-section">'
+        "<h3>Trade frequency — backtest vs recorded</h3>"
+        f"{intro}"
+        "<table class='trade-freq-table'><thead><tr>"
+        "<th>Strategy</th><th>Backtest / validation (expected)</th>"
+        "<th>Paper sim</th><th>cTrader demo</th><th>Live</th>"
+        "</tr></thead><tbody>"
+        f"{rows_html}</tbody></table>"
+        f"{parallel_block}"
+        "</section>"
+    )
+
+
+def load_portfolio_state_display(root: Path) -> dict | None:
+    """Load portfolio_state.json for the portfolio engine status widget."""
+    path = root / "data" / "logs" / "execution" / "portfolio_state.json"
+    data, err = _load_json(path)
+    if err or not isinstance(data, dict):
+        return None
+    return data
+
+
+def load_portfolio_config_display() -> dict:
+    """Return a display-friendly summary of portfolio config."""
+    try:
+        from src import config_portfolio as cp
+        return {
+            k: getattr(cp, k)
+            for k in dir(cp)
+            if k.startswith("PORTFOLIO_")
+        }
+    except Exception:
+        return {}
+
+
+def _format_portfolio_state(state: dict | None, cfg: dict) -> str:
+    """Render a compact portfolio engine status block for the dashboard."""
+    if not state:
+        return "<p class='desc'>No portfolio state file yet — run the live tick once to create it.</p>"
+
+    equity  = float(state.get("equity", 1.0))
+    peak    = float(state.get("peak_equity", 1.0))
+    dd      = (peak - equity) / peak if peak > 0 else 0.0
+    active  = state.get("active_strategy") or "—"
+    a_dir   = int(state.get("active_direction", 0))
+    a_sz    = float(state.get("active_size", 0.0))
+    paused  = bool(state.get("portfolio_paused"))
+    p_until = state.get("pause_until_utc") or ""
+    p_reason = state.get("pause_reason") or ""
+    streak  = int(state.get("loss_streak", 0))
+    trade_n = len(state.get("trade_rets", []))
+
+    dir_str = "long" if a_dir > 0 else ("short" if a_dir < 0 else "flat")
+    dd_class = "color:#f88" if dd >= 0.02 else ("color:#fa8" if dd >= 0.01 else "color:#8c8")
+    pause_html = ""
+    if paused or p_until:
+        pause_html = (
+            f"<p style='color:#f88;font-weight:bold;margin:0.3rem 0'>⚠ PORTFOLIO PAUSED"
+            + (f" until {_html_escape(p_until)}" if p_until else "")
+            + (f" — {_html_escape(p_reason)}" if p_reason else "")
+            + "</p>"
+        )
+
+    by_strat = cfg.get("PORTFOLIO_SIZING_MODE_BY_STRATEGY") or {}
+    default_mode = str(cfg.get("PORTFOLIO_SIZING_MODE_DEFAULT", "full"))
+    sizing_rows = ""
+    try:
+        from scripts.run_live_tick import STRATEGIES as _strats
+        ids = [s["id"] for s in _strats]
+    except Exception:
+        ids = list(by_strat.keys())
+    for sid in ids:
+        mode = by_strat.get(sid, default_mode)
+        mode_color = "#caca7a" if mode == "vol_only" else ("#7aacda" if mode == "full" else "#8af")
+        sizing_rows += (
+            f"<tr><td>{_html_escape(sid)}</td>"
+            f"<td style='color:{mode_color};font-weight:bold'>{_html_escape(mode)}</td></tr>"
+        )
+
+    siblings = cfg.get("PORTFOLIO_STRATEGY_SIBLINGS") or {}
+    sibling_rows = ""
+    for sid, sibs in siblings.items():
+        sibling_rows += f"<tr><td>{_html_escape(sid)}</td><td>{_html_escape(', '.join(sibs))}</td></tr>"
+
+    return f"""
+{pause_html}
+<div class="stat-bar">
+  <span>Equity: <strong>{equity:.6f}</strong></span>
+  &nbsp;·&nbsp;<span>Peak: <strong>{peak:.6f}</strong></span>
+  &nbsp;·&nbsp;<span>Drawdown: <strong><span style="{dd_class}">{dd:.3%}</span></strong></span>
+  &nbsp;·&nbsp;<span>Active strategy: <strong>{_html_escape(active)}</strong>
+    {"(" + dir_str + " " + str(a_sz) + " lots)" if a_dir != 0 else ""}</span>
+  &nbsp;·&nbsp;<span>Loss streak: <strong>{streak}</strong></span>
+  &nbsp;·&nbsp;<span>Closed trades tracked: <strong>{trade_n}</strong></span>
+</div>
+<h4>Sizing modes</h4>
+<p class="desc"><strong>full</strong> = vol × trend × DD × streak &nbsp;|&nbsp; <strong>vol_only</strong> = vol multiplier only &nbsp;|&nbsp; <strong>fixed</strong> = base size only</p>
+<table><thead><tr><th>Strategy id</th><th>Mode</th></tr></thead><tbody>{sizing_rows}</tbody></table>
+<h4>Sibling groups <span class="badge badge-sim">same-signal pairs</span></h4>
+<p class="desc">When a sibling already holds an open position, the other is blocked from sending broker orders (paper equity books still track independently).</p>
+<table><thead><tr><th>Strategy</th><th>Siblings (defers when sibling is active)</th></tr></thead><tbody>{sibling_rows}</tbody></table>
+"""
+
 
 
 def load_strategy_live_stats(root: Path, pred_rows: list[dict], paper_state: dict | None) -> dict:
@@ -701,6 +946,10 @@ def build_html(root: Path) -> str:
 
     registry = load_strategy_registry()
     strategy_live = load_strategy_live_stats(root, pred_rows, paper_state)
+    portfolio_state = load_portfolio_state_display(root)
+    portfolio_cfg   = load_portfolio_config_display()
+    tf_live = compute_trade_frequency_from_trade_log(trade_rows or [])
+    trade_freq_html = _render_trade_frequency_section(registry, tf_live, trade_err=trade_err)
 
     # ── walk-forward (regression_v1) ───────────────────────────────────────────
     wf_intro_html = """<details class="inner-details wf-details">
@@ -748,6 +997,17 @@ def build_html(root: Path) -> str:
             if param_rows else "<p class='desc'>No parameters defined.</p>"
         )
 
+        # Sizing mode badge
+        sizing_by = portfolio_cfg.get("PORTFOLIO_SIZING_MODE_BY_STRATEGY") or {}
+        sizing_default = str(portfolio_cfg.get("PORTFOLIO_SIZING_MODE_DEFAULT", "full"))
+        sizing_mode = sizing_by.get(entry.id, sizing_default)
+        sizing_colors = {"vol_only": "badge-technique", "full": "badge-active", "fixed": "badge-sim"}
+        sizing_cls = sizing_colors.get(sizing_mode, "badge-future")
+        sizing_badge = (
+            f'<span class="badge {sizing_cls}">'
+            f"SIZING: {_html_escape(sizing_mode.upper())}</span>"
+        )
+
         # Live stats bar
         stats = live.get(entry.id, {})
         counts = stats.get("signal_counts", {})
@@ -758,7 +1018,11 @@ def build_html(root: Path) -> str:
         last_bar   = _html_escape(str(stats.get("last_bar_ts", "—")))
         last_run   = _html_escape(str(stats.get("last_run_at", "—")))
         lag        = stats.get("bar_lag_hours", "")
-        lag_html   = f" <span class='lag {'lag-warn' if lag and float(lag) > 0.5 else 'lag-ok'}'>(lag {lag}h)</span>" if lag else ""
+        try:
+            lag_f = float(lag)
+            lag_html = f" <span class='lag {'lag-warn' if lag_f > 0.5 else 'lag-ok'}'>(lag {lag}h)</span>"
+        except (TypeError, ValueError):
+            lag_html = ""
         pos        = _html_escape(str(stats.get("current_position", "?")))
         eq         = stats.get("current_equity")
         eq_html    = f"{float(eq):.6f}" if eq is not None else "—"
@@ -797,6 +1061,7 @@ def build_html(root: Path) -> str:
   <span class="strat-name">{_html_escape(entry.name)}</span>
   {active_badge} {locked_badge}
   <span class="badge badge-technique">{_html_escape(entry.technique)}</span>
+  {sizing_badge}
   {mode_badge}
 </summary>
 <div class="strat-body">
@@ -1172,6 +1437,25 @@ Signals are generated every 2 minutes when <code>run_live_tick.py</code> runs.
 Each strategy runs independently on every tick; signals are tagged with a <em>strategy_id</em>.
 Expand a card to see its technique, live parameters, and last-tick stats.</p>
 {strategies_html}
+
+{trade_freq_html}
+
+<!-- ═══════════════════════════════════════════════════════ PORTFOLIO ENGINE -->
+<h2>Portfolio engine</h2>
+<p class="desc">Cross-strategy position permission and sizing layer.
+Reads <code>portfolio_state.json</code> on every tick; gates each strategy before execution; adjusts lot size by mode.
+State file: <code>data/logs/execution/portfolio_state.json</code>.</p>
+<section>
+{_format_portfolio_state(portfolio_state, portfolio_cfg)}
+<details class="inner-details">
+  <summary>Portfolio risk config (from config_portfolio.py)</summary>
+  <div class="inner-body">
+  <table><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody>
+  {''.join(f"<tr><td><code>{_html_escape(k)}</code></td><td>{_html_escape(str(v))}</td></tr>" for k,v in sorted(portfolio_cfg.items()) if not isinstance(v, dict))}
+  </tbody></table>
+  </div>
+</details>
+</section>
 
 <!-- ═══════════════════════════════════════════════════════ EXECUTION -->
 <h2>{"Demo broker" if is_demo else "Paper trading"} <span class="badge {"badge-demo" if is_demo else "badge-sim"}">{"DEMO" if is_demo else "SIMULATION"}</span></h2>
