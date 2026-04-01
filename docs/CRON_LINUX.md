@@ -224,6 +224,26 @@ The warning is non-fatal; the model may still load and run. Monitor for any actu
 
 ---
 
+## 8. Dashboard on port 80 (nginx)
+
+The dashboard listens on **5050** (`scripts/run_dashboard.py`). To open it at **`http://<server-ip>/`** without a port, use nginx as a reverse proxy.
+
+1. Install nginx: `sudo apt install -y nginx`
+2. Install the site from the repo (adjust the IP in `server_name` if you do not use `192.168.0.10`):
+
+```bash
+sudo cp /home/tom/dev/FreeWillyBot/deploy/nginx-freewillybot.conf /etc/nginx/sites-available/freewillybot
+sudo ln -sf /etc/nginx/sites-available/freewillybot /etc/nginx/sites-enabled/freewillybot
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl restart nginx
+```
+
+3. **If the browser still shows “Welcome to nginx!”** after a config change, run **`sudo systemctl restart nginx`** (full restart). A `reload` can leave workers serving the old default page until restart.
+
+4. Ensure the dashboard is running on 5050 (e.g. `@reboot` in crontab — see §2 source-of-truth doc commit or manual).
+
+---
+
 ## Livetick environment variables
 
 | Variable | Meaning |
