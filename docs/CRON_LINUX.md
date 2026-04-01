@@ -25,7 +25,22 @@ mkdir -p /home/tom/dev/FreeWillyBot/data/logs
 
 ---
 
-## 2. Crontab entries (match Mac launchd)
+## 2. Source of truth (code changes)
+
+**Do not commit application code only on the Linux box.** Treat this machine as a **deploy target**: develop and commit on your main checkout (e.g. Mac), push to `origin`, then on the server:
+
+```bash
+cd /home/tom/dev/FreeWillyBot
+git pull
+```
+
+If `git pull` complains that local changes would be overwritten, either **stash** (`git stash push -- path/to/file`) or **discard** edits you no longer need (`git restore path/to/file`), then pull again. Prefer fixing the conflict by aligning the server with what is already on `origin`.
+
+Cron and pipelines may **rewrite** tracked files under `data/` (features, models, predictions). That is expected runtime output; it does not replace the rule above for **source** changes (`src/`, `scripts/`, config you intend to version).
+
+---
+
+## 3. Crontab entries (match Mac launchd)
 
 | Mac launchd job        | Schedule              | Cron line |
 |------------------------|-----------------------|-----------|
@@ -54,7 +69,7 @@ The `$PROJECT` and `$PY` variables are set in the same crontab block, so cron ex
 
 ---
 
-## 3. Install with the script (optional)
+## 4. Install with the script (optional)
 
 From the repo root:
 
@@ -77,7 +92,7 @@ To only **print** the lines without installing:
 
 ---
 
-## 4. “At load” behaviour on Mac
+## 5. “At load” behaviour on Mac
 
 On the Mac, launchd runs each job once at login/boot (RunAtLoad). With cron there is no “at load”; the first run is at the next scheduled time. So:
 
@@ -95,7 +110,7 @@ cd /home/tom/dev/FreeWillyBot
 
 ---
 
-## 5. Logs
+## 6. Logs
 
 Same paths as on the Mac:
 
@@ -107,11 +122,11 @@ Tail livetick: `tail -f /home/tom/dev/FreeWillyBot/data/logs/livetick_stdout.log
 
 ---
 
-## 6. No signals on the Linux copy
+## 7. No signals on the Linux copy
 
 If the Signal log stays empty on the Linux machine, work through these checks.
 
-### 6.1 Confirm cron is running
+### 7.1 Confirm cron is running
 
 ```bash
 crontab -l   # should show the FreeWillyBot livetick line
@@ -122,7 +137,7 @@ tail -20 /home/tom/dev/FreeWillyBot/data/logs/livetick_stdout.log   # any "[clas
 
 If the log files are missing or never updated, cron may not be running the job (wrong user, wrong path in crontab, or cron daemon not running).
 
-### 6.2 Run livetick once by hand
+### 7.2 Run livetick once by hand
 
 This shows errors that cron would hide:
 
@@ -136,7 +151,7 @@ Watch for:
 - **FileNotFoundError** (e.g. `meta_model.pkl`, `test.csv`, `regression_best.pkl`) → data or models are missing on this machine.
 - **"No signal produced"** or **"[regression_v1] No features_regression_core test file"** → data pipeline hasn’t been run here.
 
-### 6.3 Data and models on the Linux box
+### 7.3 Data and models on the Linux box
 
 The Linux copy needs its own data and models; a plain `git pull` does not create `data/processed`, `data/features`, or `data/models`. If you never ran refresh/train on this machine, strategies will fail or return no rows.
 
@@ -155,7 +170,7 @@ After that, cron’s livetick job can run every 2 minutes and append to the Sign
 .venv/bin/python -m scripts.run_daily_retrain --skip-if-recent 20
 ```
 
-### 6.4 Copy data from the Mac (alternative)
+### 7.4 Copy data from the Mac (alternative)
 
 If you prefer to reuse the Mac’s data instead of re-downloading and retraining on Linux:
 
@@ -166,7 +181,7 @@ If you prefer to reuse the Mac’s data instead of re-downloading and retraining
 
 Then run livetick once by hand (6.2) to confirm signals appear.
 
-### 6.5 InconsistentVersionWarning (sklearn pickle)
+### 7.5 InconsistentVersionWarning (sklearn pickle)
 
 If you see:
 
