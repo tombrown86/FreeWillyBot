@@ -8,7 +8,6 @@ Usage (from repo root):
   python scripts/reset_paper_demo_state.py
   python scripts/reset_paper_demo_state.py --also-strategy-state
   python scripts/reset_paper_demo_state.py --signals
-  python scripts/reset_paper_demo_state.py --demo-orders
   python scripts/reset_paper_demo_state.py --also-strategy-state --signals
 """
 
@@ -21,10 +20,42 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 EXEC = ROOT / "data" / "logs" / "execution"
 PREDICTIONS_LIVE = ROOT / "data" / "predictions" / "predictions_live.csv"
 TRADE_DECISIONS = EXEC / "trade_decisions.csv"
 PAPER_SIM_CSV = EXEC / "paper_simulation.csv"
+
+
+def _regression_strategy_state() -> dict:
+    return {
+        "n_trades": 0,
+        "trade_rets": [],
+        "peak_equity": 1.0,
+        "current_equity": 1.0,
+        "pause_remaining": 0,
+        "paused": False,
+        "current_position": 0,
+        "trade_start_equity": 1.0,
+    }
+
+
+def _session_breakout_state() -> dict:
+    return {
+        "position": 0,
+        "bars_held": 0,
+        "last_session_id": "",
+        "n_trades": 0,
+        "trade_rets": [],
+        "peak_equity": 1.0,
+        "current_equity": 1.0,
+        "trade_start_equity": 1.0,
+        "day_start_equity": 1.0,
+        "current_day": -1,
+        "pause_remaining": 0,
+        "paused": False,
+    }
 
 
 def strip_demo_rows_from_trade_csv(path: Path) -> None:
@@ -67,12 +98,12 @@ def main() -> int:
     p.add_argument(
         "--also-strategy-state",
         action="store_true",
-        help="Also reset regression_v1_state.json and mean_reversion_v1_state.json to defaults (not classifier).",
+        help="Reset portfolio_state.json and all per-strategy *state.json files (regression v1/v2, mean reversion, session breakout).",
     )
     p.add_argument(
         "--signals",
         action="store_true",
-        help="Delete live signal + order log CSVs (predictions_live, trade_decisions, paper_simulation). Next tick recreates them.",
+        help="Delete live predictions + trade CSVs (including legacy backups) and livetick lock. Next tick recreates logs.",
     )
     p.add_argument(
         "--demo-orders",
@@ -81,35 +112,41 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    paper = EXEC / "paper_sim_state.json"
-    default_strategies = ["classifier_v1", "regression_v1", "mean_reversion_v1"]
-    data = {
-        sid: {"position": "flat", "equity": 1.0} for sid in default_strategies
-    }
-    for sid in default_strategies:
+    from src.strategy_registry import STRATEGIES
+
+    strat_ids = [s.id for s in STRATEGIES]
+    data: dict = {}
+    for sid in strat_ids:
+        data[sid] = {"position": "flat", "equity": 1.0}
         data[f"{sid}_paper"] = {"position": "flat", "equity": 1.0}
     data["_demo_broker_pos"] = "flat"
+
+    paper = EXEC / "paper_sim_state.json"
     paper.parent.mkdir(parents=True, exist_ok=True)
     with open(paper, "w") as f:
         json.dump(data, f, indent=2)
-    print(f"Wrote {paper} (all strategies flat, equity 1.0, parallel *_paper keys reset, _demo_broker_pos=flat)")
+    print(
+        f"Wrote {paper} ({len(strat_ids)} strategies + *_paper, _demo_broker_pos=flat)"
+    )
 
     if args.also_strategy_state:
-        reg = EXEC / "regression_v1_state.json"
-        if reg.exists():
-            s = {
-                "n_trades": 0,
-                "trade_rets": [],
-                "peak_equity": 1.0,
-                "current_equity": 1.0,
-                "pause_remaining": 0,
-                "paused": False,
-                "current_position": 0,
-                "trade_start_equity": 1.0,
-            }
-            with open(reg, "w") as f:
-                json.dump(s, f, indent=2)
-            print(f"Reset {reg}")
+        from src.portfolio_engine import _default_state, save_portfolio_state
+
+        save_portfolio_state(_default_state())
+        print("Reset portfolio_state.json (defaults)")
+
+        reg = _regression_strategy_state()
+        for name in (
+            "regression_v1_state.json",
+            "regression_v2_trendfilter_state.json",
+            "regression_v2_trendfilter_portfolio_vol_state.json",
+        ):
+            path = EXEC / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(reg, f, indent=2)
+            print(f"Reset {path}")
+
         mr = EXEC / "mean_reversion_v1_state.json"
         mr_default = {
             "position": 0,
@@ -127,6 +164,11 @@ def main() -> int:
         with open(mr, "w") as f:
             json.dump(mr_default, f, indent=2)
         print(f"Wrote {mr}")
+
+        sb = EXEC / "session_breakout_v1_state.json"
+        with open(sb, "w") as f:
+            json.dump(_session_breakout_state(), f, indent=2)
+        print(f"Wrote {sb}")
 
     if args.demo_orders:
         strip_demo_rows_from_trade_csv(TRADE_DECISIONS)
@@ -146,6 +188,22 @@ def main() -> int:
                     print(f"(skip) {label} — not present")
             except OSError as e:
                 print(f"Could not remove {path}: {e}", file=sys.stderr)
+
+        for pattern in ("trade_decisions_legacy*.csv", "paper_simulation_legacy*.csv"):
+            for path in sorted(EXEC.glob(pattern)):
+                try:
+                    path.unlink()
+                    print(f"Removed {path.name}")
+                except OSError as e:
+                    print(f"Could not remove {path}: {e}", file=sys.stderr)
+
+        lock = EXEC / "run_live_tick.lock"
+        if lock.exists():
+            try:
+                lock.unlink()
+                print(f"Removed {lock.name}")
+            except OSError as e:
+                print(f"Could not remove lock: {e}", file=sys.stderr)
 
     return 0
 
