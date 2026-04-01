@@ -58,10 +58,12 @@ PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
     # regression_v2_trendfilter and its portfolio-vol variant share the same signal.
-    # Only one should hold an active position on the demo account at any time.
-    # Paper books track independently (is_strategy_allowed only gates execution orders).
+    # trendfilter is the primary: it will defer if portfolio_vol already holds a position.
+    # portfolio_vol no longer defers to trendfilter so both can execute demo trades
+    # independently (different sizing modes; dual exposure is intentional for comparison).
+    # Paper books always track independently regardless of this setting.
     "regression_v2_trendfilter":              ["regression_v2_trendfilter_portfolio_vol"],
-    "regression_v2_trendfilter_portfolio_vol": ["regression_v2_trendfilter"],
+    "regression_v2_trendfilter_portfolio_vol": [],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
