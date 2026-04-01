@@ -57,12 +57,10 @@ PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
 }
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
-    # regression_v2_trendfilter and its portfolio-vol variant share the same signal.
-    # trendfilter is the primary: it will defer if portfolio_vol already holds a position.
-    # portfolio_vol no longer defers to trendfilter so both can execute demo trades
-    # independently (different sizing modes; dual exposure is intentional for comparison).
-    # Paper books always track independently regardless of this setting.
-    "regression_v2_trendfilter":              ["regression_v2_trendfilter_portfolio_vol"],
+    # v2 pair shares one cTrader demo account; livetick sends real orders only for
+    # regression_v2_trendfilter_portfolio_vol (vol_only). The full v2 strategy is
+    # sim-only on demo — no sibling deferral needed (see scripts/run_live_tick.py).
+    "regression_v2_trendfilter":              [],
     "regression_v2_trendfilter_portfolio_vol": [],
 }
 

@@ -6,10 +6,11 @@ By default also runs **paper execution**: tracks per-strategy simulated position
 and equity (using each bar's bar_return), logs to trade_decisions.csv and
 paper_simulation.csv. Use --no-execute for signals only.
 
-**Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), the script
-sends real orders to the configured broker (cTrader/OANDA/Binance demo). Position
-is read from and updated on the broker; still paper/demo only (EXECUTION_PAPER_ONLY).
-Use after you are happy with paper results.
+**Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), strategies listed
+in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders; others stay simulated
+(signals + paper equity still update). The v2 pair shares one account — only
+``regression_v2_trendfilter_portfolio_vol`` is on that list so demo uses vol-only sizing;
+``regression_v2_trendfilter`` stays paper/sim. Still EXECUTION_PAPER_ONLY globally.
 """
 
 import csv
@@ -78,6 +79,17 @@ STRATEGIES = [
     # session_breakout_v1 disabled 2026-03: 27/27 parameter combos losing, structural rejection
     # {"id": "session_breakout_v1", "module": "src.live_signal_session_breakout", "fn": "run"},
 ]
+
+# With --demo-broker, real cTrader orders only for these; others stay simulated (paper books still update).
+# Full v2 uses full portfolio sizing; v2 portfolio_vol uses vol_only — one demo account → demo = vol_only only.
+DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
+    {
+        "classifier_v1",
+        "regression_v1",
+        "mean_reversion_v1",
+        "regression_v2_trendfilter_portfolio_vol",
+    }
+)
 
 PAPER_STATE_PATH = PROJECT_ROOT / "data" / "logs" / "execution" / "paper_sim_state.json"
 PAPER_SIM_CSV = PROJECT_ROOT / "data" / "logs" / "execution" / "paper_simulation.csv"
@@ -457,6 +469,9 @@ def _run_strategy(
     parallel_paper_sim: bool = False,
 ) -> bool:
     sid = strategy["id"]
+    strategy_demo = bool(
+        demo_broker and sid in DEMO_BROKER_REAL_ORDER_STRATEGY_IDS
+    )
     state_snapshot: str | None = None
     state_file_path = None
     try:
@@ -598,8 +613,8 @@ def _run_strategy(
                 else:
                     eq_after_bar = eq_before
 
-                dry_run = not demo_broker
-                if demo_broker and broker_position_ref is not None:
+                dry_run = not strategy_demo
+                if strategy_demo and broker_position_ref is not None:
                     broker_pos = broker_position_ref["pos"]
                 else:
                     broker_pos = sim_pos
@@ -608,26 +623,27 @@ def _run_strategy(
                 new_pos = _next_sim_position(sim_pos, action_taken)
                 st["equity"] = eq_after_bar
                 st["position"] = new_pos
-                if demo_broker and broker_position_ref is not None:
+                if strategy_demo and broker_position_ref is not None:
                     bp_new = _demo_broker_pos_after_action(action_taken)
                     if bp_new is not None:
                         broker_position_ref["pos"] = bp_new
 
-                # ── Portfolio engine: record open / close ────────────────
+                # ── Portfolio engine: record open / close (real demo orders only) ──
                 try:
-                    if sim_pos == "flat" and new_pos in ("long", "short"):
-                        # Position opened — record entry equity and direction
-                        _dir = 1 if new_pos == "long" else -1
-                        _sz  = float(row.get("portfolio_size", 1.0))
-                        record_position_open(_port_state, sid, _dir, _sz)
-                        st["last_open_equity"] = eq_after_bar
-                    elif sim_pos in ("long", "short") and new_pos == "flat":
-                        # Position closed — compute trade return and update portfolio state
-                        _open_eq = float(st.get("last_open_equity") or eq_before)
-                        _trade_ret = float(eq_after_bar - _open_eq) / max(_open_eq, 1e-12)
-                        record_trade_result(_port_state, _trade_ret, sid, _PORTFOLIO_CFG)
-                        record_position_close(_port_state, sid)
-                    save_portfolio_state(_port_state)
+                    if strategy_demo:
+                        if sim_pos == "flat" and new_pos in ("long", "short"):
+                            # Position opened — record entry equity and direction
+                            _dir = 1 if new_pos == "long" else -1
+                            _sz  = float(row.get("portfolio_size", 1.0))
+                            record_position_open(_port_state, sid, _dir, _sz)
+                            st["last_open_equity"] = eq_after_bar
+                        elif sim_pos in ("long", "short") and new_pos == "flat":
+                            # Position closed — compute trade return and update portfolio state
+                            _open_eq = float(st.get("last_open_equity") or eq_before)
+                            _trade_ret = float(eq_after_bar - _open_eq) / max(_open_eq, 1e-12)
+                            record_trade_result(_port_state, _trade_ret, sid, _PORTFOLIO_CFG)
+                            record_position_close(_port_state, sid)
+                        save_portfolio_state(_port_state)
                 except Exception as _pe:
                     logging.warning("[%s] portfolio state update error: %s", sid, _pe)
                 # ── end portfolio engine record ──────────────────────────
@@ -657,13 +673,13 @@ def _run_strategy(
                         eq_after_bar,
                         new_pos,
                         br,
-                        mode="demo" if demo_broker else "sim",
+                        mode="demo" if strategy_demo else "sim",
                         account_position_before=account_before,
                     )
                 logging.info(
                     "[%s] %s: action_taken=%s equity=%.6f position=%s",
                     sid,
-                    "demo broker" if demo_broker else "paper sim",
+                    "demo broker" if strategy_demo else "paper sim",
                     action_taken,
                     eq_after_bar,
                     new_pos,
