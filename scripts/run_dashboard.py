@@ -387,7 +387,6 @@ def _render_trade_frequency_section(
 
     return (
         '<section class="trade-freq-section">'
-        "<h3>Trade frequency — backtest vs recorded</h3>"
         f"{intro}"
         "<table class='trade-freq-table'><thead><tr>"
         "<th>Strategy</th><th>Backtest / validation (expected)</th>"
@@ -1077,7 +1076,7 @@ def build_html(root: Path) -> str:
       <p class="desc"><strong>Known weaknesses:</strong> {_html_escape(entry.known_weaknesses)}</p>
     </div>
   </details>
-  <details class="inner-details" open>
+  <details class="inner-details">
     <summary>Live parameters (from config.py)</summary>
     <div class="inner-body">{param_table}</div>
   </details>
@@ -1251,9 +1250,9 @@ def build_html(root: Path) -> str:
     # ── pred signal table (filterable) ───────────────────────────────────────
     pred_html = _render_signal_log_block(pred_rows, pred_err)
 
-    # ── collapsible execution blocks ─────────────────────────────────────────
-    _paper_open = "" if is_demo else " open"
-    _demo_open  = " open" if is_demo else ""
+    # ── collapsible execution blocks (all collapsed on load; expand in UI) ───
+    _paper_open = ""
+    _demo_open = ""
 
     _paper_parallel_section = ""
     if is_demo:
@@ -1277,7 +1276,7 @@ def build_html(root: Path) -> str:
             + paper_sim_equity_html
         )
 
-    paper_block_html = f"""<details{_paper_open}>
+    paper_block_html = f"""<details class="dashboard-panel dashboard-panel-nested"{_paper_open}>
 <summary><strong>Paper simulation</strong> <span class="badge badge-sim">SIMULATION</span> — parallel paper equity and orders</summary>
 <section>
 {_paper_sim_only_equity_block}
@@ -1295,7 +1294,7 @@ def build_html(root: Path) -> str:
         "so each can log.</p>"
     )
 
-    demo_block_html = f"""<details{_demo_open}>
+    demo_block_html = f"""<details class="dashboard-panel dashboard-panel-nested"{_demo_open}>
 <summary><strong>Demo broker</strong> <span class="badge badge-demo">DEMO</span> — demo-path equity and orders</summary>
 <section>
 <h3>Demo-path equity <span class="badge badge-demo">DEMO</span></h3>
@@ -1308,7 +1307,7 @@ def build_html(root: Path) -> str:
 </section>
 </details>"""
 
-    real_trades_block_html = f"""<details>
+    real_trades_block_html = f"""<details class="dashboard-panel dashboard-panel-nested">
 <summary><strong>Real trades</strong> <span class="badge badge-live">LIVE</span> <span class="badge badge-future">NOT YET ENABLED</span></summary>
 <section>
 <p class="desc">Real trades will be recorded here once <code>execution_paper_only = False</code> is set in config and
@@ -1383,8 +1382,25 @@ details[open] > summary::before {{ content: "▼ "; }}
 details > summary:hover {{ background: #2a2a2a; }}
 details[open] > summary {{ border-bottom: 1px solid #333; border-radius: 4px 4px 0 0; }}
 details > section, details > .details-body {{ padding: 0.75rem 1rem; }}
+.dashboard-panel {{ margin-bottom: 1rem; border: 1px solid #3a3a3a; border-radius: 5px; }}
+.dashboard-panel > summary {{
+    padding: 0.65rem 1rem; cursor: pointer; font-size: 1.05rem; font-weight: 600;
+    background: #252525; border-radius: 5px; list-style: none; user-select: none;
+    color: #e8e8e8;
+}}
+.dashboard-panel > summary::-webkit-details-marker {{ display: none; }}
+.dashboard-panel > summary::before {{ content: "▶ "; font-size: 0.75rem; opacity: 0.65; margin-right: 0.2rem; }}
+.dashboard-panel[open] > summary::before {{ content: "▼ "; }}
+.dashboard-panel > summary:hover {{ background: #2e2e2e; }}
+.dashboard-panel[open] > summary {{ border-bottom: 1px solid #3a3a3a; border-radius: 5px 5px 0 0; }}
+.dashboard-panel > .details-body,
+.dashboard-panel > section {{ padding: 0.85rem 1rem 1rem 1rem; }}
+.dashboard-panel-nested {{ margin: 0.75rem 0 0 0; border-color: #333; }}
+.dashboard-panel-nested > summary {{ font-size: 0.95rem; font-weight: 600; background: #1e1e1e; }}
+.trade-freq-section {{ margin: 0; }}
 .badge-active   {{ background: #1a3a1a; border: 1px solid #3a7a3a; color: #7aca7a; }}
 .badge-technique {{ background: #2a2a1a; border: 1px solid #7a7a3a; color: #caca7a; font-weight: normal; }}
+.strategy-card {{ margin: 0.5rem 0; }}
 .strategy-card > summary {{ display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }}
 .strat-name {{ font-weight: bold; font-size: 0.95rem; margin-right: 0.3rem; }}
 .strat-body {{ padding: 0.75rem 1rem; }}
@@ -1432,20 +1448,29 @@ Signals are generated every 2 minutes when <code>run_live_tick.py</code> runs.
 <small style="opacity:0.5">(page auto-refreshes every 60 s)</small></p>
 
 <!-- ═══════════════════════════════════════════════════════ STRATEGIES -->
-<h2>Strategies</h2>
-<p class="desc">{len(registry)} strategies registered · {sum(1 for s in registry if s.active)} active.
-Each strategy runs independently on every tick; signals are tagged with a <em>strategy_id</em>.
+<details class="dashboard-panel">
+<summary>Strategies — {len(registry)} registered · {sum(1 for s in registry if s.active)} active</summary>
+<section>
+<p class="desc">Each strategy runs independently on every tick; signals are tagged with a <em>strategy_id</em>.
 Expand a card to see its technique, live parameters, and last-tick stats.</p>
 {strategies_html}
+</section>
+</details>
 
+<details class="dashboard-panel">
+<summary>Trade frequency — backtest vs recorded</summary>
+<div class="details-body">
 {trade_freq_html}
+</div>
+</details>
 
 <!-- ═══════════════════════════════════════════════════════ PORTFOLIO ENGINE -->
-<h2>Portfolio engine</h2>
+<details class="dashboard-panel">
+<summary>Portfolio engine — cross-strategy sizing &amp; gates</summary>
+<section>
 <p class="desc">Cross-strategy position permission and sizing layer.
 Reads <code>portfolio_state.json</code> on every tick; gates each strategy before execution; adjusts lot size by mode.
 State file: <code>data/logs/execution/portfolio_state.json</code>.</p>
-<section>
 {_format_portfolio_state(portfolio_state, portfolio_cfg)}
 <details class="inner-details">
   <summary>Portfolio risk config (from config_portfolio.py)</summary>
@@ -1456,13 +1481,17 @@ State file: <code>data/logs/execution/portfolio_state.json</code>.</p>
   </div>
 </details>
 </section>
+</details>
 
 <!-- ═══════════════════════════════════════════════════════ EXECUTION -->
-<h2>{"Demo broker" if is_demo else "Paper trading"} <span class="badge {"badge-demo" if is_demo else "badge-sim"}">{"DEMO" if is_demo else "SIMULATION"}</span></h2>
+<details class="dashboard-panel">
+<summary>{"Demo broker" if is_demo else "Paper trading"} <span class="badge {"badge-demo" if is_demo else "badge-sim"}">{"DEMO" if is_demo else "SIMULATION"}</span> — signals &amp; orders</summary>
+<section>
 <p class="desc">Every time the live tick runs, each strategy evaluates the latest bar and records what it <em>would</em> do{"." if not is_demo else ", and sends an order to the demo broker account."}</p>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Signal log — newest {DASHBOARD_SIGNAL_LOG_CAP} of {DASHBOARD_PREDICTIONS_LIMIT} loaded</summary>
 <section>
-<h3>Signal log — newest {DASHBOARD_SIGNAL_LOG_CAP} of {DASHBOARD_PREDICTIONS_LIMIT} loaded</h3>
 <p class="desc">Shows the latest {DASHBOARD_SIGNAL_LOG_CAP} rows (newest 10 visible by default; use the button for older rows in that window). One row per strategy per tick. <strong>timestamp</strong> is the <em>bar close time</em> in the data (not necessarily &quot;now&quot;).
 <strong>bar_lag_hours</strong> = hours between that bar and when the tick ran (large = stale features — run data refresh).
 <strong>signal_source</strong>: <code>test_csv_tail</code> = classifier last bar; <code>regression_features_tail</code> = regression last bar + live model prediction; <code>replay_predictions</code> only if <code>REGRESSION_LIVE_USE_FEATURE_TAIL = False</code> in config.
@@ -1473,64 +1502,86 @@ Use the filters below to narrow by strategy, signal, blocked flag, or text searc
 <p class="signal-dist">{signal_dist}</p>
 {pred_html}
 </section>
+</details>
 
 {demo_block_html}
 {paper_block_html}
 {real_trades_block_html}
+</section>
+</details>
 
 <!-- ═══════════════════════════════════════════════════════ BACKTEST VALIDATION -->
-<h2>Backtest &amp; validation</h2>
+<details class="dashboard-panel">
+<summary>Backtest &amp; validation</summary>
+<section>
 <p class="desc">Historical results used to validate the strategies before paper trading.
 These are fixed — they don't update unless you re-run the validation scripts.</p>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Walk-forward validation (regression_v1)</summary>
 <section>
-<h3>Walk-forward validation (regression_v1)</h3>
 <p class="desc">Rolling windows the model never trained on — good for checking whether an edge holds across time.
 Each row is one window; <strong>net_return</strong> is after costs for that window only. Use the expandable note below to compare this to the full-period headline in <code>config.py</code>.</p>
 {wf_block_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Cost stress test (regression_v1)</summary>
 <section>
-<h3>Cost stress test (regression_v1)</h3>
 <p class="desc">Shows how the strategy holds up when trading costs are artificially increased (1×, 1.5×, 2×).
 A strategy that only works at unrealistically low costs is fragile. We want the edge to survive at 2× costs.</p>
 {cost_stress_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Backtest report (classifier_v1, latest run)</summary>
 <section>
-<h3>Backtest report (classifier_v1, latest run)</h3>
 <p class="desc">Summary metrics from the most recent full backtest run on the classifier strategy.
 <strong>Profit factor</strong>: total gross profit divided by total gross loss — above 1.0 means net positive.
 <strong>Sharpe</strong>: return per unit of risk. Baselines show how a simple momentum or flat strategy would have done.</p>
 {bt_html if bt_html else "<p>No backtest report found — run the backtest script to generate one.</p>"}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Validation report (classifier_v1)</summary>
 <section>
-<h3>Validation report (classifier_v1)</h3>
 <p class="desc">Per-metric summary from the model validation run — shows whether the classifier signal is statistically
 meaningful (e.g. directional accuracy, calibration, edge after costs).</p>
 {val_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Regime report (classifier_v1)</summary>
 <section>
-<h3>Regime report (classifier_v1)</h3>
 <p class="desc">Breaks down performance by market regime (e.g. trending vs choppy, high vs low volatility).
 Shows whether the strategy's edge is consistent across different market conditions.</p>
 {regime_html}
 </section>
+</details>
+</section>
+</details>
 
 <!-- ═══════════════════════════════════════════════════════ MODEL & DATA -->
-<h2>Model &amp; data</h2>
-
+<details class="dashboard-panel">
+<summary>Model &amp; data</summary>
 <section>
-<h3>Data diagnostics</h3>
+
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Data diagnostics</summary>
+<section>
 <p class="desc">Checks run on the raw price and feature data — missing bars, outliers, alignment issues.
 Any warnings here mean the input data may affect signal quality.</p>
 {diag_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Model config</summary>
 <section>
-<h3>Model config</h3>
 <p class="desc">Technical settings used when training the models — which algorithm was chosen and why,
 and the hyperparameters from the best training run.</p>
 <h4>Baseline choice</h4>
@@ -1538,20 +1589,28 @@ and the hyperparameters from the best training run.</p>
 <h4>Meta config</h4>
 {meta_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Pipeline status</summary>
 <section>
-<h3>Pipeline status</h3>
 <p class="desc">Shows when each automated job last ran, based on log file timestamps.
 If a file is stale, the corresponding pipeline step may not be running correctly on its schedule.</p>
 {pipeline_html}
 </section>
+</details>
 
+<details class="dashboard-panel dashboard-panel-nested">
+<summary>Feature freshness</summary>
 <section>
-<h3>Feature freshness</h3>
 <p class="desc">Key data files and when they were last updated. The price data and features should refresh daily.
 If these timestamps are old, signals may be based on stale data.</p>
 {freshness_html}
 </section>
+</details>
+
+</section>
+</details>
 
 {_dashboard_table_filter_script()}
 </body>
