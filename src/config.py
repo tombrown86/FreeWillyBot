@@ -187,3 +187,9 @@ RV2_KILL_SWITCH_N: int = 20
 RV2_KILL_SWITCH_PF: float = 0.9
 RV2_DD_KILL: float = 0.02
 RV2_PAUSE_BARS: int = 72
+
+# Short-term momentum filter — block entries when 6-bar return opposes desired direction
+RV2_MOM_THRESHOLD: float = 0.0005   # |ret_6| threshold; tune after observing live blocks
+
+# Max hold — force-close after this many bars regardless of signal (12 bars = 60 min)
+RV2_MAX_HOLD_BARS: int = 12

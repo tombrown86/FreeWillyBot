@@ -78,6 +78,8 @@ def _load_config() -> dict:
         RV2_DD_KILL,
         RV2_KILL_SWITCH_N,
         RV2_KILL_SWITCH_PF,
+        RV2_MAX_HOLD_BARS,
+        RV2_MOM_THRESHOLD,
         RV2_PAUSE_BARS,
         RV2_PRED_THRESHOLD,
         RV2_TOP_PCT,
@@ -99,6 +101,8 @@ def _load_config() -> dict:
         "session_exclude_hours": SESSION_EXCLUDE_HOURS,
         "trend_resample":    RV2_TREND_RESAMPLE,
         "trend_ma_window":   RV2_TREND_MA_WINDOW,
+        "mom_threshold":     RV2_MOM_THRESHOLD,
+        "max_hold_bars":     RV2_MAX_HOLD_BARS,
     }
 
 
@@ -114,6 +118,7 @@ def _default_state() -> dict:
         "paused": False,
         "current_position": 0,
         "trade_start_equity": 1.0,
+        "bars_held": 0,
     }
 
 
@@ -209,6 +214,7 @@ def _one_bar_output_v2(
     vol: float,
     target_ret: float,
     ret_1: float,
+    ret_6: float,
     cfg: dict,
     state: dict,
     all_pred: np.ndarray,
@@ -236,6 +242,21 @@ def _one_bar_output_v2(
         )
     if blocked:
         desired = 0
+
+    # ── Short-term momentum filter ────────────────────────────────────────────
+    # Block new entries when the 6-bar return strongly opposes the desired direction.
+    # Does NOT close existing positions — only prevents counter-momentum entries.
+    mom_blocked = False
+    if not blocked:
+        mom_th = cfg.get("mom_threshold", 0.0005)
+        if desired == 1 and ret_6 < -mom_th:
+            desired = 0
+            mom_blocked = True
+            reason = "short_term_momentum"
+        elif desired == -1 and ret_6 > mom_th:
+            desired = 0
+            mom_blocked = True
+            reason = "short_term_momentum"
 
     # ── 4h trend filter gate ──────────────────────────────────────────────────
     trend = _get_trend_state(
@@ -289,8 +310,16 @@ def _one_bar_output_v2(
                 desired = 0
 
     # ── Position logic ────────────────────────────────────────────────────────
-    if not blocked and not trend_blocked:
+    if not blocked and not trend_blocked and not mom_blocked:
         prev = state["current_position"]
+        bars_held = int(state.get("bars_held", 0))
+
+        # Max hold — force flat after RV2_MAX_HOLD_BARS bars regardless of signal
+        if prev != 0 and bars_held >= cfg.get("max_hold_bars", 12):
+            desired = 0
+            if not reason:
+                reason = "max_hold"
+
         if desired == 1 and prev != 1:
             signal = "BUY"
             action = "OPEN_LONG" if prev == 0 else "REVERSE_LONG"
@@ -299,6 +328,7 @@ def _one_bar_output_v2(
                 _record_trade_close(state)
             state["trade_start_equity"] = state["current_equity"]
             state["current_position"] = 1
+            state["bars_held"] = 1
         elif desired == -1 and prev != -1:
             signal = "SELL"
             action = "OPEN_SHORT" if prev == 0 else "REVERSE_SHORT"
@@ -307,14 +337,18 @@ def _one_bar_output_v2(
                 _record_trade_close(state)
             state["trade_start_equity"] = state["current_equity"]
             state["current_position"] = -1
+            state["bars_held"] = 1
         elif desired == 0 and prev != 0:
             signal = "FLAT"
             action = "CLOSE"
             _record_trade_close(state)
             state["current_position"] = 0
+            state["bars_held"] = 0
         else:
             signal = "BUY" if desired == 1 else ("SELL" if desired == -1 else "FLAT")
             action = "NONE"
+            if prev != 0:
+                state["bars_held"] = bars_held + 1
 
     if state["current_position"] != 0:
         state["current_equity"] *= 1 + state["current_position"] * target_ret
@@ -325,12 +359,17 @@ def _one_bar_output_v2(
 
     rdy, hint = _regression_proximity(
         pred, vol, cfg, all_pred, all_vol, selection_desired,
-        blocked or trend_blocked, reason,
+        blocked or trend_blocked or mom_blocked, reason,
     )
     if trend_blocked and not blocked:
         trend_dir = "up" if not trend["trend_down"] else "down"
         hint = (
             f"Trend filter: 4h MA{cfg['trend_ma_window']} trend={trend_dir} blocks "
+            f"{'LONG' if selection_desired == 1 else 'SHORT'} entry · {hint}"
+        )[:280]
+    if mom_blocked and not blocked and not trend_blocked:
+        hint = (
+            f"Momentum filter: ret_6={ret_6:+.5f} opposes "
             f"{'LONG' if selection_desired == 1 else 'SHORT'} entry · {hint}"
         )[:280]
     if action != "NONE":
@@ -344,7 +383,7 @@ def _one_bar_output_v2(
         "pred":              round(pred, 8),
         "vol_6":             round(vol, 8),
         "confidence":        round(abs(pred), 8),
-        "blocked":           1 if (blocked or trend_blocked) else 0,
+        "blocked":           1 if (blocked or trend_blocked or mom_blocked) else 0,
         "reason":            reason,
         "P_buy":             round(pred, 8) if pred > 0 else 0.0,
         "P_sell":            round(abs(pred), 8) if pred < 0 else 0.0,
@@ -392,7 +431,10 @@ def _run_feature_tail(n_bars: int, *, strategy_id: str) -> list[dict]:
         return []
 
     state_path, _cursor_path = _paths_for(strategy_id)
-    tail = df.tail(max(1, n_bars)).reset_index(drop=True)
+    # Pull extra context rows so ret_6 is non-NaN on the first processed bar
+    ctx = df.tail(max(7, n_bars + 6)).copy()
+    ctx["ret_6"] = ctx["close"].pct_change(6)
+    tail = ctx.tail(max(1, n_bars)).reset_index(drop=True)
     cfg = _load_config()
     state = _load_state(state_path)
     output: list[dict] = []
@@ -408,8 +450,9 @@ def _run_feature_tail(n_bars: int, *, strategy_id: str) -> list[dict]:
         vol = float(row.get("vol_6", 0) or 0)
         target_ret = float(row[target_col]) if target_col in row.index and pd.notna(row.get(target_col)) else 0.0
         ret_1 = float(row["ret_1"]) if "ret_1" in row.index and pd.notna(row.get("ret_1")) else 0.0
+        ret_6 = float(row["ret_6"]) if pd.notna(row.get("ret_6")) else 0.0
         out = _one_bar_output_v2(
-            bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1,
+            bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1, ret_6=ret_6,
             cfg=cfg, state=state, all_pred=all_pred, all_vol=all_vol,
             idx_label=f"live tail row {i}",
             signal_source=f"{strategy_id}_features_tail",
@@ -441,6 +484,8 @@ def _run_replay(n_bars: int, *, strategy_id: str) -> list[dict]:
     state = _load_state(state_path)
     all_pred = df["pred"].values.astype(float)
     all_vol = df["vol_6"].fillna(0).values.astype(float)
+    # Pre-compute ret_6 for the whole df so context is always available
+    df["ret_6"] = df["close"].pct_change(6) if "close" in df.columns else 0.0
     output = []
 
     for offset in range(n_bars):
@@ -455,8 +500,9 @@ def _run_replay(n_bars: int, *, strategy_id: str) -> list[dict]:
         vol = float(bar.get("vol_6", 0) or 0)
         target_ret = float(bar.get("target_ret", 0) or 0)
         ret_1 = float(bar["ret_1"]) if "ret_1" in bar.index and pd.notna(bar.get("ret_1")) else 0.0
+        ret_6 = float(bar["ret_6"]) if pd.notna(bar.get("ret_6")) else 0.0
         out = _one_bar_output_v2(
-            bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1,
+            bar_ts=bar_ts, pred=pred, vol=vol, target_ret=target_ret, ret_1=ret_1, ret_6=ret_6,
             cfg=cfg, state=state, all_pred=all_pred, all_vol=all_vol,
             idx_label=f"replay idx {idx}",
             signal_source=f"{strategy_id}_replay",

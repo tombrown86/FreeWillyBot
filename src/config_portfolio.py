@@ -52,8 +52,10 @@ PORTFOLIO_LOT_STEP: float = 0.01
 PORTFOLIO_SIZING_MODE_DEFAULT: str = "full"
 
 PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
-    # Same signal as regression_v2_trendfilter; portfolio uses vol-targeting only (backtest winner)
-    "regression_v2_trendfilter_portfolio_vol": "vol_only",
+    # Temporarily using fixed size (1 lot) to remove volatility amplification while
+    # the new momentum filter and max-hold exit are being validated in paper/demo.
+    # Switch back to "vol_only" after confirming stable behaviour over several weeks.
+    "regression_v2_trendfilter_portfolio_vol": "fixed",
 }
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
