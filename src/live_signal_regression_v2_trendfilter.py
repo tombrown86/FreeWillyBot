@@ -431,9 +431,13 @@ def _run_feature_tail(n_bars: int, *, strategy_id: str) -> list[dict]:
         return []
 
     state_path, _cursor_path = _paths_for(strategy_id)
-    # Pull extra context rows so ret_6 is non-NaN on the first processed bar
+    # Extra tail rows so the last n_bars rows have valid ret_6 (first rows of any slice can be NaN).
     ctx = df.tail(max(7, n_bars + 6)).copy()
-    ctx["ret_6"] = ctx["close"].pct_change(6)
+    if "ret_6" not in ctx.columns:
+        if "close" in ctx.columns:
+            ctx["ret_6"] = ctx["close"].pct_change(6)
+        else:
+            ctx["ret_6"] = 0.0
     tail = ctx.tail(max(1, n_bars)).reset_index(drop=True)
     cfg = _load_config()
     state = _load_state(state_path)
@@ -484,8 +488,12 @@ def _run_replay(n_bars: int, *, strategy_id: str) -> list[dict]:
     state = _load_state(state_path)
     all_pred = df["pred"].values.astype(float)
     all_vol = df["vol_6"].fillna(0).values.astype(float)
-    # Pre-compute ret_6 for the whole df so context is always available
-    df["ret_6"] = df["close"].pct_change(6) if "close" in df.columns else 0.0
+    # ret_6 for momentum filter (prefer column from parquet, else from close)
+    if "ret_6" not in df.columns:
+        if "close" in df.columns:
+            df["ret_6"] = df["close"].pct_change(6)
+        else:
+            df["ret_6"] = 0.0
     output = []
 
     for offset in range(n_bars):
