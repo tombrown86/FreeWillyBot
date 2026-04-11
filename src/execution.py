@@ -824,6 +824,55 @@ def _current_position_from_broker() -> str:
         return "flat"
 
 
+_PROCESS_SIGNAL_CHILD_ENV = "FWB_PROCESS_SIGNAL_CHILD"
+
+
+def _use_ctrader_subprocess(dry_run: bool) -> bool:
+    """Real cTrader calls use Twisted — only one reactor lifetime per process."""
+    if os.environ.get(_PROCESS_SIGNAL_CHILD_ENV) == "1":
+        return False
+    if dry_run:
+        return False
+    if not _ctrader_access_token():
+        return False
+    return _get_broker() == "ctrader"
+
+
+def _process_signal_ctrader_subprocess(
+    row: dict,
+    current_position: str,
+    *,
+    account_id_override: int | None,
+) -> tuple[str, str]:
+    """Run process_signal in a fresh interpreter so each cTrader session gets a clean reactor."""
+    import subprocess
+
+    payload = json.dumps(
+        {
+            "row": row,
+            "current_position": current_position,
+            "dry_run": False,
+            "account_id_override": account_id_override,
+        },
+        default=str,
+    )
+    child = Path(__file__).resolve().parent.parent / "scripts" / "ctrader_process_signal_child.py"
+    r = subprocess.run(
+        [sys.executable, str(child)],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        input=payload,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, _PROCESS_SIGNAL_CHILD_ENV: "1"},
+    )
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip() or "child process failed"
+        raise RuntimeError(err)
+    out = json.loads(r.stdout)
+    return str(out["action_taken"]), str(out["broker_response"])
+
+
 def process_signal(
     row: dict,
     current_position: str,
@@ -841,6 +890,10 @@ def process_signal(
 
     account_id_override: cTrader login/ctid to route orders to (strategy's own account).
     """
+    if _use_ctrader_subprocess(dry_run):
+        return _process_signal_ctrader_subprocess(
+            row, current_position, account_id_override=account_id_override
+        )
     _setup_logging()
     action = row.get("action", "NONE")
     blocked = row.get("blocked", 0)
@@ -980,17 +1033,21 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _acct = args.account_id
-    if args.test_order:
-        place_market_order(side="buy", account_id_override=_acct)
-    elif args.positions:
-        print(get_open_positions(account_id_override=_acct))
-    elif args.close_all:
-        close_all_positions(account_id_override=_acct)
-    elif args.cancel_orders:
-        cancel_all_orders()
-    elif args.run_signals:
-        from src.live_signal import run as run_live_signal
-        rows = run_live_signal(n_bars=50)
-        run_with_signals(rows, dry_run=not args.live)
-    else:
-        parser.print_help()
+    try:
+        if args.test_order:
+            place_market_order(side="buy", account_id_override=_acct)
+        elif args.positions:
+            print(get_open_positions(account_id_override=_acct))
+        elif args.close_all:
+            print(close_all_positions(account_id_override=_acct))
+        elif args.cancel_orders:
+            cancel_all_orders()
+        elif args.run_signals:
+            from src.live_signal import run as run_live_signal
+            rows = run_live_signal(n_bars=50)
+            run_with_signals(rows, dry_run=not args.live)
+        else:
+            parser.print_help()
+    except Exception as e:
+        print(f"{type(e).__name__}: {e}", file=sys.stderr)
+        raise SystemExit(1) from e
