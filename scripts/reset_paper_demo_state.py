@@ -9,6 +9,7 @@ Usage (from repo root):
   python scripts/reset_paper_demo_state.py --also-strategy-state
   python scripts/reset_paper_demo_state.py --signals
   python scripts/reset_paper_demo_state.py --also-strategy-state --signals
+  python scripts/reset_paper_demo_state.py --close-all-accounts   # close positions on all demo accounts first
 """
 
 from __future__ import annotations
@@ -110,23 +111,56 @@ def main() -> int:
         action="store_true",
         help="Remove only demo broker rows (mode=demo) from trade_decisions.csv and paper_simulation.csv; keeps paper/sim rows.",
     )
+    p.add_argument(
+        "--close-all-accounts",
+        action="store_true",
+        help=(
+            "Close open positions on EVERY account listed in DEMO_CTRADER_ACCOUNT_BY_STRATEGY "
+            "before resetting state. Requires PS_CTRADER_ACCESS_TOKEN etc. to be set."
+        ),
+    )
     args = p.parse_args()
 
     from src.strategy_registry import STRATEGIES
+    from src.config_portfolio import DEMO_CTRADER_ACCOUNT_BY_STRATEGY as account_map
+
+    if args.close_all_accounts:
+        from src.execution import close_all_positions
+
+        if not account_map:
+            print("DEMO_CTRADER_ACCOUNT_BY_STRATEGY is empty — closing default account only")
+            print(close_all_positions())
+        else:
+            closed_accounts = set()
+            for sid, acct_id in account_map.items():
+                if acct_id in closed_accounts:
+                    continue
+                print(f"Closing all positions on account {acct_id} (strategy: {sid}) …")
+                try:
+                    result = close_all_positions(account_id_override=acct_id)
+                    print(f"  → {result}")
+                except Exception as e:
+                    print(f"  → ERROR: {e}", file=sys.stderr)
+                closed_accounts.add(acct_id)
 
     strat_ids = [s.id for s in STRATEGIES]
     data: dict = {}
     for sid in strat_ids:
         data[sid] = {"position": "flat", "equity": 1.0}
         data[f"{sid}_paper"] = {"position": "flat", "equity": 1.0}
+    # Legacy shared key (backward compat)
     data["_demo_broker_pos"] = "flat"
+    # Per-account keys for each entry in the account map
+    for acct_id in set(account_map.values()):
+        data[f"_demo_broker_pos_{acct_id}"] = "flat"
 
     paper = EXEC / "paper_sim_state.json"
     paper.parent.mkdir(parents=True, exist_ok=True)
     with open(paper, "w") as f:
         json.dump(data, f, indent=2)
+    per_acct_note = f", per-account pos keys: {sorted(set(account_map.values()))}" if account_map else ""
     print(
-        f"Wrote {paper} ({len(strat_ids)} strategies + *_paper, _demo_broker_pos=flat)"
+        f"Wrote {paper} ({len(strat_ids)} strategies + *_paper, _demo_broker_pos=flat{per_acct_note})"
     )
 
     if args.also_strategy_state:

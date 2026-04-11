@@ -270,6 +270,9 @@ cd /home/tom/dev/FreeWillyBot
 # Paper sim + demo bookkeeping only (equity 1.0, flat, _demo_broker_pos flat)
 .venv/bin/python scripts/reset_paper_demo_state.py
 
+# Close ALL demo account positions first, then reset state (use at start of a new monitoring window)
+.venv/bin/python scripts/reset_paper_demo_state.py --close-all-accounts
+
 # Also reset regression + mean-reversion JSON state files
 .venv/bin/python scripts/reset_paper_demo_state.py --also-strategy-state
 
@@ -279,8 +282,52 @@ cd /home/tom/dev/FreeWillyBot
 # Clear only demo broker order rows from the trade logs (keeps paper/sim rows)
 .venv/bin/python scripts/reset_paper_demo_state.py --demo-orders
 
-# Full wipe (common after debugging multi-strategy demo)
-.venv/bin/python scripts/reset_paper_demo_state.py --also-strategy-state --signals
+# Full clean start (common at the beginning of a new monitoring period)
+.venv/bin/python scripts/reset_paper_demo_state.py --close-all-accounts --also-strategy-state --signals
 ```
 
 The next `run_live_tick` run recreates CSV headers when it appends the first row. Using **`--signals`** deletes the whole trade CSVs; **`--demo-orders`** only strips rows with `mode=demo` from `trade_decisions.csv` and `paper_simulation.csv`.
+
+---
+
+## Demo account pool
+
+Four cTrader demo accounts are mapped one-to-one with the four active real-demo strategies. Each strategy sends real orders only to its own account, giving clean per-strategy attribution and making it easy to reset or inspect any one strategy independently.
+
+| Account login | Strategy | Notes |
+|---|---|---|
+| 4243419 | regression_v1 | Original account; history continuity |
+| 4247810 | regression_v2_trendfilter_portfolio_vol | Patched v2 (momentum filter + max-hold) |
+| 4247811 | mean_reversion_v1 | |
+| 4247812 | classifier_v1 | |
+
+The mapping lives in `src/config_portfolio.py` (`DEMO_CTRADER_ACCOUNT_BY_STRATEGY`). To change which account a strategy uses, edit that dict and do a `git pull` on the server.
+
+### Check positions on a specific account
+
+```bash
+cd /home/tom/dev/FreeWillyBot
+# Default account (PS_CTRADER_ACCOUNT_ID)
+.venv/bin/python -m src.execution --positions
+
+# Specific account by login
+.venv/bin/python -m src.execution --positions --account-id 4247810
+.venv/bin/python -m src.execution --positions --account-id 4247811
+.venv/bin/python -m src.execution --positions --account-id 4247812
+```
+
+### Close all positions on a specific account
+
+```bash
+.venv/bin/python -m src.execution --close-all --account-id 4247810
+```
+
+### Close all positions on all accounts at once
+
+```bash
+.venv/bin/python scripts/reset_paper_demo_state.py --close-all-accounts
+```
+
+### Authorize new accounts in cTrader Playground
+
+All four accounts share the same OAuth access token (same cTrader user). If a new account shows "not authorized", authorize the app against your Pepperstone cTrader credentials at [Playground](https://connect.spotware.com/playground) and update `PS_CTRADER_ACCESS_TOKEN` in `.env`.

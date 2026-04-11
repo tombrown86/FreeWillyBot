@@ -81,7 +81,7 @@ STRATEGIES = [
 ]
 
 # With --demo-broker, real cTrader orders only for these; others stay simulated (paper books still update).
-# Full v2 uses full portfolio sizing; v2 portfolio_vol uses vol_only — one demo account → demo = vol_only only.
+# Each strategy in this set should have its own account in DEMO_CTRADER_ACCOUNT_BY_STRATEGY.
 DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
     {
         "classifier_v1",
@@ -90,6 +90,19 @@ DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
         "regression_v2_trendfilter_portfolio_vol",
     }
 )
+
+# Per-strategy cTrader account mapping (login numbers). Imported directly from portfolio config.
+# Strategies absent from this map fall back to PS_CTRADER_ACCOUNT_ID in .env.
+try:
+    from src.config_portfolio import DEMO_CTRADER_ACCOUNT_BY_STRATEGY as _DEMO_ACCOUNT_BY_STRATEGY
+except ImportError:
+    _DEMO_ACCOUNT_BY_STRATEGY = {}
+
+
+def _resolve_demo_account_id(strategy_id: str) -> int | None:
+    """Return the cTrader login/account_id for a strategy, or None to use the .env default."""
+    v = _DEMO_ACCOUNT_BY_STRATEGY.get(strategy_id)
+    return int(v) if v is not None else None
 
 PAPER_STATE_PATH = PROJECT_ROOT / "data" / "logs" / "execution" / "paper_sim_state.json"
 PAPER_SIM_CSV = PROJECT_ROOT / "data" / "logs" / "execution" / "paper_simulation.csv"
@@ -144,6 +157,11 @@ def _load_paper_state() -> dict:
         strat_ids = {s["id"] for s in STRATEGIES}
         for k, v in data.items():
             if k == "_demo_broker_pos":
+                if v in ("flat", "long", "short"):
+                    out[k] = v
+                continue
+            if k.startswith("_demo_broker_pos_"):
+                # Per-account position key — preserve as-is (string value)
                 if v in ("flat", "long", "short"):
                     out[k] = v
                 continue
@@ -467,6 +485,7 @@ def _run_strategy(
     demo_broker: bool = False,
     broker_position_ref: dict | None = None,
     parallel_paper_sim: bool = False,
+    account_id_override: int | None = None,
 ) -> bool:
     sid = strategy["id"]
     strategy_demo = bool(
@@ -619,7 +638,9 @@ def _run_strategy(
                 else:
                     broker_pos = sim_pos
                 account_before = broker_pos
-                action_taken, broker_response = process_signal(row, broker_pos, dry_run=dry_run)
+                action_taken, broker_response = process_signal(
+                    row, broker_pos, dry_run=dry_run, account_id_override=account_id_override
+                )
                 new_pos = _next_sim_position(sim_pos, action_taken)
                 st["equity"] = eq_after_bar
                 st["position"] = new_pos
@@ -805,16 +826,26 @@ def _run_locked(
 
         run_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         paper_state = _load_paper_state() if execute else {}
-        broker_position_ref = None
+
+        # Per-account broker position refs (one entry per distinct cTrader account in use).
+        # This replaces the old single broker_position_ref — each real-demo strategy now has
+        # its own account and therefore its own independent position tracker.
+        broker_position_refs: dict[int, dict] = {}  # account_id → {"pos": "flat"|"long"|"short"}
         if execute and demo_broker:
-            # Persisted net demo account position (one broker; not inferred from per-strategy sim).
-            # Twisted reactor can only start once per process — cannot reconcile broker here
-            # before place_market_order(). Updated only when a real order fills.
-            bp = paper_state.get("_demo_broker_pos", "flat")
-            if bp not in ("flat", "long", "short"):
-                bp = "flat"
-            broker_position_ref = {"pos": bp}
-            logging.info("Demo broker mode: account position (persisted) = %s", bp)
+            for _s in STRATEGIES:
+                if _s["id"] not in DEMO_BROKER_REAL_ORDER_STRATEGY_IDS:
+                    continue
+                _acct = _resolve_demo_account_id(_s["id"])
+                if _acct is None:
+                    continue
+                if _acct not in broker_position_refs:
+                    _bp_key = f"_demo_broker_pos_{_acct}"
+                    # Prefer per-account key; fall back to legacy shared key on first run
+                    _bp = paper_state.get(_bp_key, paper_state.get("_demo_broker_pos", "flat"))
+                    if _bp not in ("flat", "long", "short"):
+                        _bp = "flat"
+                    broker_position_refs[_acct] = {"pos": _bp}
+                    logging.info("Demo broker mode: account %s position (persisted) = %s", _acct, _bp)
             if parallel_paper_sim:
                 logging.info(
                     "Parallel paper sim: also persisting independent dry-run books under {id}_paper"
@@ -826,14 +857,20 @@ def _run_locked(
                 run_at,
                 paper_state,
                 demo_broker=demo_broker,
-                broker_position_ref=broker_position_ref,
+                broker_position_ref=broker_position_refs.get(_resolve_demo_account_id(s["id"]) or -1),
                 parallel_paper_sim=parallel_paper_sim,
+                account_id_override=_resolve_demo_account_id(s["id"]),
             )
             for s in STRATEGIES
         ]
         if execute:
-            if demo_broker and broker_position_ref is not None:
-                paper_state["_demo_broker_pos"] = broker_position_ref["pos"]
+            # Persist per-account positions; keep legacy key pointing at the first account's pos
+            for _acct_id, _ref in broker_position_refs.items():
+                paper_state[f"_demo_broker_pos_{_acct_id}"] = _ref["pos"]
+            if broker_position_refs:
+                # Legacy key: use the position of the first account for backward compat
+                _first_pos = next(iter(broker_position_refs.values()))["pos"]
+                paper_state["_demo_broker_pos"] = _first_pos
             _save_paper_state(paper_state)
         ok = all(results)
         if ok:

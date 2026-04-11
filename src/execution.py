@@ -119,7 +119,7 @@ def _ctrader_safe_stop_reactor() -> None:
         pass
 
 
-def _ctrader_call(work_fn) -> dict:
+def _ctrader_call(work_fn, *, account_id_override: int | None = None) -> dict:
     """
     Run `work_fn(client, access_token, account_id, result_holder)` inside
     a Twisted reactor running in a thread.  Returns result_holder["result"].
@@ -132,6 +132,8 @@ def _ctrader_call(work_fn) -> dict:
         work_fn(client, access_token: str, account_id: int, result: dict) -> None
     It must set result["data"] (dict) and/or result["error"] (str) then call
     result["done"].set() to unblock the caller.
+
+    account_id_override: if provided, use this login/ctid instead of PS_CTRADER_ACCOUNT_ID.
     """
     from ctrader_open_api import Client, Protobuf, TcpProtocol, EndPoints
     from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
@@ -147,7 +149,7 @@ def _ctrader_call(work_fn) -> dict:
     from twisted.internet import reactor
 
     access_token = _ctrader_access_token()
-    account_id = int(_ctrader_account_id_str() or "0")
+    account_id = account_id_override if account_id_override is not None else int(_ctrader_account_id_str() or "0")
     client_id = os.environ.get("PS_CTRADER_CLIENTID", "").strip()
     client_secret = os.environ.get("PS_CTRADER_SECRET", "").strip()
 
@@ -269,7 +271,7 @@ def _ctrader_call(work_fn) -> dict:
     return result["data"] or {}
 
 
-def _ctrader_place_order(side: str) -> dict:
+def _ctrader_place_order(side: str, *, account_id_override: int | None = None) -> dict:
     """Place a minimal MARKET order on the demo account."""
     from ctrader_open_api.messages.OpenApiMessages_pb2 import (
         ProtoOANewOrderReq,
@@ -308,10 +310,10 @@ def _ctrader_place_order(side: str) -> dict:
         d.addCallback(on_resp)
         d.addErrback(on_err)
 
-    return _ctrader_call(work)
+    return _ctrader_call(work, account_id_override=account_id_override)
 
 
-def _ctrader_get_positions() -> dict:
+def _ctrader_get_positions(*, account_id_override: int | None = None) -> dict:
     """Query open positions via ProtoOAReconcileReq. Returns parsed positions/orders and eurusd_symbol_id."""
     from ctrader_open_api.messages.OpenApiModelMessages_pb2 import ProtoOATradeSide
     from ctrader_open_api.messages.OpenApiMessages_pb2 import ProtoOAReconcileReq
@@ -362,7 +364,7 @@ def _ctrader_get_positions() -> dict:
         d.addCallback(on_resp)
         d.addErrback(on_err)
 
-    return _ctrader_call(work)
+    return _ctrader_call(work, account_id_override=account_id_override)
 
 
 def _ctrader_close_position(position_id: int, volume_units: int) -> dict:
@@ -400,7 +402,7 @@ def _ctrader_close_position(position_id: int, volume_units: int) -> dict:
     return _ctrader_call(work)
 
 
-def _ctrader_close_all() -> dict:
+def _ctrader_close_all(*, account_id_override: int | None = None) -> dict:
     """
     Reconcile open positions AND close them all in a SINGLE reactor session.
 
@@ -485,17 +487,20 @@ def _ctrader_close_all() -> dict:
         d.addCallback(on_reconcile)
         d.addErrback(on_reconcile_err)
 
-    return _ctrader_call(work)
+    return _ctrader_call(work, account_id_override=account_id_override)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def place_market_order(
     side: str,
     units: float | None = None,
+    *,
+    account_id_override: int | None = None,
 ) -> dict:
     """
     Place a small test market order. Paper/demo only.
     side: 'buy' or 'sell'
+    account_id_override: cTrader login/ctid to use instead of PS_CTRADER_ACCOUNT_ID.
     """
     if not EXECUTION_PAPER_ONLY:
         raise RuntimeError("EXECUTION_PAPER_ONLY must be True; no live execution")
@@ -515,7 +520,7 @@ def place_market_order(
             out = {"simulated": True, "side": side, "broker": "ctrader"}
             _log_broker_response("place_market_order", out)
             return out
-        resp = _ctrader_place_order(side)
+        resp = _ctrader_place_order(side, account_id_override=account_id_override)
         _log_broker_response("place_market_order", resp)
         return resp
 
@@ -567,7 +572,7 @@ def place_market_order(
         return resp
 
 
-def get_open_positions() -> dict:
+def get_open_positions(*, account_id_override: int | None = None) -> dict:
     """Query open positions. Log response."""
     _setup_logging()
     broker = _get_broker()
@@ -583,7 +588,7 @@ def get_open_positions() -> dict:
             out = {"simulated": True, "positions": [], "broker": "ctrader"}
             _log_broker_response("get_open_positions", out)
             return out
-        resp = _ctrader_get_positions()
+        resp = _ctrader_get_positions(account_id_override=account_id_override)
         resp["broker"] = "ctrader"
         _log_broker_response("get_open_positions", resp)
         return resp
@@ -628,7 +633,7 @@ def get_open_positions() -> dict:
         return out
 
 
-def close_position(position_id: str | None = None) -> dict:
+def close_position(position_id: str | None = None, *, account_id_override: int | None = None) -> dict:
     """Close a position. For OANDA pass position_id; for Binance close BTC position.
 
     For cTrader: always closes ALL open positions in a single reactor session via
@@ -636,6 +641,8 @@ def close_position(position_id: str | None = None) -> dict:
     (separate reconcile call + close call) caused ReactorNotRestartable on every
     close attempt after the first cTrader call in the same process, resulting in
     30-second timeouts on every tick.
+
+    account_id_override: cTrader login/ctid to close positions on instead of PS_CTRADER_ACCOUNT_ID.
     """
     if not EXECUTION_PAPER_ONLY:
         raise RuntimeError("EXECUTION_PAPER_ONLY must be True")
@@ -651,7 +658,7 @@ def close_position(position_id: str | None = None) -> dict:
             _log_broker_response("close_position", out)
             return out
         # Single reactor session: reconcile + close all in one _ctrader_call
-        resp = _ctrader_close_all()
+        resp = _ctrader_close_all(account_id_override=account_id_override)
         resp["broker"] = "ctrader"
         _log_broker_response("close_position", resp)
         return resp
@@ -710,9 +717,9 @@ def close_position(position_id: str | None = None) -> dict:
         return resp
 
 
-def close_all_positions() -> dict:
-    """Close all open positions."""
-    return close_position(position_id=None)
+def close_all_positions(*, account_id_override: int | None = None) -> dict:
+    """Close all open positions on the given account (or default PS_CTRADER_ACCOUNT_ID)."""
+    return close_position(position_id=None, account_id_override=account_id_override)
 
 
 def cancel_all_orders() -> dict:
@@ -811,6 +818,8 @@ def process_signal(
     row: dict,
     current_position: str,
     dry_run: bool = True,
+    *,
+    account_id_override: int | None = None,
 ) -> tuple[str, str]:
     """
     Process one signal row. Apply safeguards.
@@ -819,6 +828,8 @@ def process_signal(
     - if blocked=1: do nothing, log NONE
     - if already in position and action is OPEN_*: allow only if reversal
     - one position max, no pyramiding
+
+    account_id_override: cTrader login/ctid to route orders to (strategy's own account).
     """
     _setup_logging()
     action = row.get("action", "NONE")
@@ -840,7 +851,7 @@ def process_signal(
             return "NONE", json.dumps({"skipped": "already_flat"})
         if dry_run:
             return "CLOSE_SIMULATED", json.dumps({"simulated": True, "action": "close"})
-        resp = close_all_positions()
+        resp = close_all_positions(account_id_override=account_id_override)
         return "CLOSE", json.dumps(resp, default=str)
 
     if action == "OPEN_LONG":
@@ -849,10 +860,10 @@ def process_signal(
         if current_position == "short":
             if dry_run:
                 return "REVERSE_TO_LONG_SIMULATED", json.dumps({"simulated": True, "from": "short", "to": "long"})
-            close_all_positions()
+            close_all_positions(account_id_override=account_id_override)
         if dry_run:
             return "OPEN_LONG_SIMULATED", json.dumps({"simulated": True, "side": "buy"})
-        resp = place_market_order(side="buy")
+        resp = place_market_order(side="buy", account_id_override=account_id_override)
         return "OPEN_LONG", json.dumps(resp, default=str)
 
     if action == "OPEN_SHORT":
@@ -861,10 +872,10 @@ def process_signal(
         if current_position == "long":
             if dry_run:
                 return "REVERSE_TO_SHORT_SIMULATED", json.dumps({"simulated": True, "from": "long", "to": "short"})
-            close_all_positions()
+            close_all_positions(account_id_override=account_id_override)
         if dry_run:
             return "OPEN_SHORT_SIMULATED", json.dumps({"simulated": True, "side": "sell"})
-        resp = place_market_order(side="sell")
+        resp = place_market_order(side="sell", account_id_override=account_id_override)
         return "OPEN_SHORT", json.dumps(resp, default=str)
 
     # Regression strategy: flip direction in one bar
@@ -874,10 +885,10 @@ def process_signal(
         if current_position == "short":
             if dry_run:
                 return "REVERSE_TO_LONG_SIMULATED", json.dumps({"simulated": True, "from": "short", "to": "long"})
-            close_all_positions()
+            close_all_positions(account_id_override=account_id_override)
         if dry_run:
             return "OPEN_LONG_SIMULATED", json.dumps({"simulated": True, "side": "buy"})
-        resp = place_market_order(side="buy")
+        resp = place_market_order(side="buy", account_id_override=account_id_override)
         return "OPEN_LONG", json.dumps(resp, default=str)
 
     if action == "REVERSE_SHORT":
@@ -886,10 +897,10 @@ def process_signal(
         if current_position == "long":
             if dry_run:
                 return "REVERSE_TO_SHORT_SIMULATED", json.dumps({"simulated": True, "from": "long", "to": "short"})
-            close_all_positions()
+            close_all_positions(account_id_override=account_id_override)
         if dry_run:
             return "OPEN_SHORT_SIMULATED", json.dumps({"simulated": True, "side": "sell"})
-        resp = place_market_order(side="sell")
+        resp = place_market_order(side="sell", account_id_override=account_id_override)
         return "OPEN_SHORT", json.dumps(resp, default=str)
 
     return "NONE", json.dumps({"skipped": "unknown_action"})
@@ -950,14 +961,21 @@ if __name__ == "__main__":
     parser.add_argument("--cancel-orders", action="store_true", help="Cancel all orders")
     parser.add_argument("--run-signals", action="store_true", help="Run live_signal and process with execution (dry-run)")
     parser.add_argument("--live", action="store_true", help="Actually call broker (still demo/testnet)")
+    parser.add_argument(
+        "--account-id",
+        type=int,
+        default=None,
+        help="Override cTrader account login/ctid (e.g. 4247810). Defaults to PS_CTRADER_ACCOUNT_ID.",
+    )
     args = parser.parse_args()
 
+    _acct = args.account_id
     if args.test_order:
-        place_market_order(side="buy")
+        place_market_order(side="buy", account_id_override=_acct)
     elif args.positions:
-        print(get_open_positions())
+        print(get_open_positions(account_id_override=_acct))
     elif args.close_all:
-        close_all_positions()
+        close_all_positions(account_id_override=_acct)
     elif args.cancel_orders:
         cancel_all_orders()
     elif args.run_signals:

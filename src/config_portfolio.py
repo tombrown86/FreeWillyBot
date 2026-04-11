@@ -59,11 +59,28 @@ PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
 }
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
-    # v2 pair shares one cTrader demo account; livetick sends real orders only for
-    # regression_v2_trendfilter_portfolio_vol (vol_only). The full v2 strategy is
-    # sim-only on demo — no sibling deferral needed (see scripts/run_live_tick.py).
+    # v2 pair each have their own demo account now; no sibling deferral needed.
     "regression_v2_trendfilter":              [],
     "regression_v2_trendfilter_portfolio_vol": [],
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-account demo pool
+# Maps strategy_id → cTrader account login number (as shown in cTrader desktop).
+# Each strategy in DEMO_BROKER_REAL_ORDER_STRATEGY_IDS should appear here so it
+# gets its own clean demo account for separate attribution and easy reset.
+# Strategies missing from this map fall back to PS_CTRADER_ACCOUNT_ID in .env.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEMO_CTRADER_ACCOUNT_BY_STRATEGY: dict[str, int] = {
+    # Account 4243419 — original demo account, kept for regression_v1 (history continuity)
+    "regression_v1": 4243419,
+    # Account 4247810 — regression_v2 patched variant with momentum filter + max-hold
+    "regression_v2_trendfilter_portfolio_vol": 4247810,
+    # Account 4247811 — mean reversion
+    "mean_reversion_v1": 4247811,
+    # Account 4247812 — classifier
+    "classifier_v1": 4247812,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
