@@ -506,13 +506,17 @@ def place_market_order(
         raise RuntimeError("EXECUTION_PAPER_ONLY must be True; no live execution")
 
     _setup_logging()
-    broker = _get_broker()
+    # Per-account override: need token only (mapping supplies the login).
+    if account_id_override is not None and _ctrader_access_token():
+        broker = "ctrader"
+    else:
+        broker = _get_broker()
     units = units or EXECUTION_TEST_UNITS
 
     if broker == "ctrader":
         access_token = _ctrader_access_token()
-        account_id = _ctrader_account_id_str()
-        if not access_token or not account_id:
+        default_acct = _ctrader_account_id_str()
+        if not access_token or (account_id_override is None and not default_acct):
             logging.warning(
                 "cTrader: set PS_CTRADER_ACCESS_TOKEN and PS_CTRADER_ACCOUNT_ID "
                 "(or PS_CTRADEER_ACCOUNT_ID / PS_CTRADEER_LOGIN); simulating"
@@ -575,12 +579,15 @@ def place_market_order(
 def get_open_positions(*, account_id_override: int | None = None) -> dict:
     """Query open positions. Log response."""
     _setup_logging()
-    broker = _get_broker()
+    if account_id_override is not None and _ctrader_access_token():
+        broker = "ctrader"
+    else:
+        broker = _get_broker()
 
     if broker == "ctrader":
         access_token = _ctrader_access_token()
-        account_id = _ctrader_account_id_str()
-        if not access_token or not account_id:
+        default_acct = _ctrader_account_id_str()
+        if not access_token or (account_id_override is None and not default_acct):
             logging.warning(
                 "cTrader: set PS_CTRADER_ACCESS_TOKEN and PS_CTRADER_ACCOUNT_ID "
                 "(or PS_CTRADEER_ACCOUNT_ID / PS_CTRADEER_LOGIN); simulating"
@@ -648,12 +655,15 @@ def close_position(position_id: str | None = None, *, account_id_override: int |
         raise RuntimeError("EXECUTION_PAPER_ONLY must be True")
 
     _setup_logging()
-    broker = _get_broker()
+    if account_id_override is not None and _ctrader_access_token():
+        broker = "ctrader"
+    else:
+        broker = _get_broker()
 
     if broker == "ctrader":
         access_token = _ctrader_access_token()
-        account_id = _ctrader_account_id_str()
-        if not access_token or not account_id:
+        default_acct = _ctrader_account_id_str()
+        if not access_token or (account_id_override is None and not default_acct):
             out = {"simulated": True, "action": "close", "broker": "ctrader"}
             _log_broker_response("close_position", out)
             return out
