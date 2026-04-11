@@ -17,6 +17,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -125,22 +127,43 @@ def main() -> int:
     from src.config_portfolio import DEMO_CTRADER_ACCOUNT_BY_STRATEGY as account_map
 
     if args.close_all_accounts:
-        from src.execution import close_all_positions
+        py = ROOT / ".venv" / "bin" / "python"
+        if not py.exists():
+            py = Path(sys.executable)
+
+        def _close_one(acct_id: int | None, label: str) -> None:
+            cmd = [str(py), "-m", "src.execution", "--close-all"]
+            if acct_id is not None:
+                cmd.extend(["--account-id", str(acct_id)])
+            print(f"Closing all positions ({label}) …")
+            try:
+                r = subprocess.run(
+                    cmd,
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                    timeout=90,
+                    env={**os.environ},
+                )
+                tail = (r.stdout or "") + (r.stderr or "")
+                if r.returncode != 0:
+                    print(f"  → exit {r.returncode}: {tail[-500:]}", file=sys.stderr)
+                else:
+                    print(f"  → ok")
+                    if tail.strip():
+                        print(f"  {tail.strip()[-400:]}")
+            except Exception as e:
+                print(f"  → ERROR: {e}", file=sys.stderr)
 
         if not account_map:
             print("DEMO_CTRADER_ACCOUNT_BY_STRATEGY is empty — closing default account only")
-            print(close_all_positions())
+            _close_one(None, "default PS_CTRADER_ACCOUNT_ID")
         else:
             closed_accounts = set()
             for sid, acct_id in account_map.items():
                 if acct_id in closed_accounts:
                     continue
-                print(f"Closing all positions on account {acct_id} (strategy: {sid}) …")
-                try:
-                    result = close_all_positions(account_id_override=acct_id)
-                    print(f"  → {result}")
-                except Exception as e:
-                    print(f"  → ERROR: {e}", file=sys.stderr)
+                _close_one(acct_id, f"account {acct_id} / {sid}")
                 closed_accounts.add(acct_id)
 
     strat_ids = [s.id for s in STRATEGIES]
