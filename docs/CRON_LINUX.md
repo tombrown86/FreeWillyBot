@@ -292,16 +292,15 @@ The next `run_live_tick` run recreates CSV headers when it appends the first row
 
 ## Demo account pool
 
-Four cTrader demo accounts are mapped one-to-one with the four active real-demo strategies. Each strategy sends real orders only to its own account, giving clean per-strategy attribution and making it easy to reset or inspect any one strategy independently.
+Three cTrader demo logins (B/C/D) are mapped to real-demo strategies; **4243419 (account A) is retired** from automation (close any open position manually if needed). `mean_reversion_v1` stays **signals + paper sim only** (no cTrader orders). Set **`PS_CTRADER_ACCOUNT_ID=4247810`** in `.env` as the default login for tooling that does not pass `--account-id`.
 
 | Account login | Strategy | Notes |
 |---|---|---|
-| 4243419 | regression_v1 | Original account; history continuity |
-| 4247810 | regression_v2_trendfilter_portfolio_vol | Patched v2 (momentum filter + max-hold) |
-| 4247811 | mean_reversion_v1 | |
-| 4247812 | classifier_v1 | |
+| 4247810 | regression_v1 | Demo B — primary regression |
+| 4247811 | regression_v2_trendfilter_portfolio_vol | Demo C — patched v2 (momentum + max-hold) |
+| 4247812 | classifier_v1 | Demo D |
 
-The mapping lives in `src/config_portfolio.py` (`DEMO_CTRADER_ACCOUNT_BY_STRATEGY`). To change which account a strategy uses, edit that dict and do a `git pull` on the server.
+The mapping lives in `src/config_portfolio.py` (`DEMO_CTRADER_ACCOUNT_BY_STRATEGY`). Real-demo strategy ids are listed in `scripts/run_live_tick.py` (`DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`). To change which account a strategy uses, edit the dict and do a `git pull` on the server.
 
 ### Check positions on a specific account
 
@@ -328,6 +327,6 @@ cd /home/tom/dev/FreeWillyBot
 .venv/bin/python scripts/reset_paper_demo_state.py --close-all-accounts
 ```
 
-### Authorize new accounts in cTrader Playground
+### Authorize accounts in Open API
 
-All four accounts share the same OAuth access token (same cTrader user). If a new account shows "not authorized", authorize the app against your Pepperstone cTrader credentials at [Playground](https://connect.spotware.com/playground) and update `PS_CTRADER_ACCESS_TOKEN` in `.env`.
+All trading logins under your cTrader ID share one OAuth access token. Generate tokens from [openapi.ctrader.com/apps](https://openapi.ctrader.com/apps) (your app → Playground / Get token). If a login shows "not authorized", complete access granting again for that account and update `PS_CTRADER_ACCESS_TOKEN` (and refresh token) in `.env`. See [cTrader Open API authentication](https://help.ctrader.com/open-api/account-authentication/).

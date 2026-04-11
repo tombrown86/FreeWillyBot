@@ -7,10 +7,10 @@ and equity (using each bar's bar_return), logs to trade_decisions.csv and
 paper_simulation.csv. Use --no-execute for signals only.
 
 **Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), strategies listed
-in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders; others stay simulated
-(signals + paper equity still update). The v2 pair shares one account — only
-``regression_v2_trendfilter_portfolio_vol`` is on that list so demo uses vol-only sizing;
-``regression_v2_trendfilter`` stays paper/sim. Still EXECUTION_PAPER_ONLY globally.
+in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders (each to its own login via
+``DEMO_CTRADER_ACCOUNT_BY_STRATEGY``); others stay simulated (signals + paper equity still update).
+``regression_v2_trendfilter`` and ``mean_reversion_v1`` stay paper/sim on demo.
+Still EXECUTION_PAPER_ONLY globally.
 """
 
 import csv
@@ -86,7 +86,6 @@ DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
     {
         "classifier_v1",
         "regression_v1",
-        "mean_reversion_v1",
         "regression_v2_trendfilter_portfolio_vol",
     }
 )

@@ -73,13 +73,9 @@ PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 DEMO_CTRADER_ACCOUNT_BY_STRATEGY: dict[str, int] = {
-    # Account 4243419 — original demo account, kept for regression_v1 (history continuity)
-    "regression_v1": 4243419,
-    # Account 4247810 — regression_v2 patched variant with momentum filter + max-hold
-    "regression_v2_trendfilter_portfolio_vol": 4247810,
-    # Account 4247811 — mean reversion
-    "mean_reversion_v1": 4247811,
-    # Account 4247812 — classifier
+    # Demo B/C/D only — account A (4243419) retired from automation; mean_reversion_v1 is sim-only.
+    "regression_v1": 4247810,
+    "regression_v2_trendfilter_portfolio_vol": 4247811,
     "classifier_v1": 4247812,
 }
 
