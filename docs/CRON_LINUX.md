@@ -292,13 +292,14 @@ The next `run_live_tick` run recreates CSV headers when it appends the first row
 
 ## Demo account pool
 
-Three cTrader demo logins (B/C/D) are mapped to real-demo strategies; **4243419 (account A) is retired** from automation (close any open position manually if needed). `mean_reversion_v1` stays **signals + paper sim only** (no cTrader orders). Set **`PS_CTRADER_ACCOUNT_ID=4247810`** in `.env` as the default login for tooling that does not pass `--account-id`.
+Three cTrader demo logins are mapped to real-demo strategies; **4247811** is an extra Pepperstone demo (not used by the bot). `mean_reversion_v1` stays **signals + paper sim only** (no cTrader orders). Set **`PS_CTRADER_ACCOUNT_ID=4247810`** in `.env` as the default login for tooling that does not pass `--account-id`.
 
 | Account login | Strategy | Notes |
 |---|---|---|
-| 4247810 | regression_v1 | Demo B — primary regression |
-| 4247811 | regression_v2_trendfilter_portfolio_vol | Demo C — patched v2 (momentum + max-hold) |
+| 4247810 | regression_v1 | Demo B |
+| 4243419 | regression_v2_trendfilter_portfolio_vol | Spare / fourth login — patched v2, `vol_only` sizing |
 | 4247812 | classifier_v1 | Demo D |
+| 4247811 | *(unused)* | Optional manual use |
 
 The mapping lives in `src/config_portfolio.py` (`DEMO_CTRADER_ACCOUNT_BY_STRATEGY`). Real-demo strategy ids are listed in `scripts/run_live_tick.py` (`DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`). To change which account a strategy uses, edit the dict and do a `git pull` on the server.
 
@@ -311,7 +312,7 @@ cd /home/tom/dev/FreeWillyBot
 
 # Specific account by login
 .venv/bin/python -m src.execution --positions --account-id 4247810
-.venv/bin/python -m src.execution --positions --account-id 4247811
+.venv/bin/python -m src.execution --positions --account-id 4243419
 .venv/bin/python -m src.execution --positions --account-id 4247812
 ```
 

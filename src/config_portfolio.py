@@ -52,10 +52,8 @@ PORTFOLIO_LOT_STEP: float = 0.01
 PORTFOLIO_SIZING_MODE_DEFAULT: str = "full"
 
 PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
-    # Temporarily using fixed size (1 lot) to remove volatility amplification while
-    # the new momentum filter and max-hold exit are being validated in paper/demo.
-    # Switch back to "vol_only" after confirming stable behaviour over several weeks.
-    "regression_v2_trendfilter_portfolio_vol": "fixed",
+    # Vol-only stack (no trend/DD/streak multipliers) — distinct from base v2 "full" sizing.
+    "regression_v2_trendfilter_portfolio_vol": "vol_only",
 }
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
@@ -73,9 +71,9 @@ PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 DEMO_CTRADER_ACCOUNT_BY_STRATEGY: dict[str, int] = {
-    # Demo B/C/D only — account A (4243419) retired from automation; mean_reversion_v1 is sim-only.
+    # B/D + spare A: mean_reversion_v1 is sim-only. Login 4247811 is unused (extra Pepperstone demo).
     "regression_v1": 4247810,
-    "regression_v2_trendfilter_portfolio_vol": 4247811,
+    "regression_v2_trendfilter_portfolio_vol": 4243419,
     "classifier_v1": 4247812,
 }
 

@@ -3,8 +3,8 @@ Phase 16 — Live tick script (every 5 min).
 
 Runs all registered strategies, appends signals to predictions_live.csv.
 By default also runs **paper execution**: tracks per-strategy simulated position
-and equity (using each bar's bar_return), logs to trade_decisions.csv and
-paper_simulation.csv. Use --no-execute for signals only.
+and equity (each bar's `bar_return` × `portfolio_size` while long/short), logs to
+trade_decisions.csv and paper_simulation.csv. Use --no-execute for signals only.
 
 **Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), strategies listed
 in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders (each to its own login via
@@ -583,10 +583,15 @@ def _run_strategy(
                         sim_p = "flat"
                     eq_before_p = float(st_p["equity"])
                     br = float(row.get("bar_return") or 0.0)
+                    try:
+                        _ps = float(row.get("portfolio_size") or 1.0)
+                    except (TypeError, ValueError):
+                        _ps = 1.0
+                    _ps = max(0.0, _ps)
                     if sim_p == "long":
-                        eq_after_bar_p = eq_before_p * (1.0 + br)
+                        eq_after_bar_p = eq_before_p * (1.0 + br * _ps)
                     elif sim_p == "short":
-                        eq_after_bar_p = eq_before_p * (1.0 - br)
+                        eq_after_bar_p = eq_before_p * (1.0 - br * _ps)
                     else:
                         eq_after_bar_p = eq_before_p
 
@@ -624,10 +629,15 @@ def _run_strategy(
                     sim_pos = "flat"
                 eq_before = float(st["equity"])
                 br = float(row.get("bar_return") or 0.0)
+                try:
+                    _ps = float(row.get("portfolio_size") or 1.0)
+                except (TypeError, ValueError):
+                    _ps = 1.0
+                _ps = max(0.0, _ps)
                 if sim_pos == "long":
-                    eq_after_bar = eq_before * (1.0 + br)
+                    eq_after_bar = eq_before * (1.0 + br * _ps)
                 elif sim_pos == "short":
-                    eq_after_bar = eq_before * (1.0 - br)
+                    eq_after_bar = eq_before * (1.0 - br * _ps)
                 else:
                     eq_after_bar = eq_before
 
