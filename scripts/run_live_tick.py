@@ -286,6 +286,56 @@ def _save_paper_state(state: dict) -> None:
         json.dump(state, f, indent=2)
 
 
+def _reconcile_demo_broker_refs(refs: dict[int, dict]) -> None:
+    """Set each ref['pos'] from live cTrader reconcile (subprocess = fresh reactor per account).
+
+    Prevents repeated OPEN_* when persisted paper_sim_state desyncs from the broker
+    (e.g. crash before save, old mapping, or missing ref falling back to sim_pos=flat).
+    """
+    if not refs:
+        return
+    py = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if not py.exists():
+        py = Path(sys.executable)
+    script = PROJECT_ROOT / "scripts" / "ctrader_net_position.py"
+    for acct_id, ref in refs.items():
+        try:
+            r = subprocess.run(
+                [str(py), str(script), str(acct_id)],
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ},
+            )
+            line = (r.stdout or "").strip().splitlines()[-1] if (r.stdout or "").strip() else ""
+            if r.returncode != 0 or not line:
+                logging.warning(
+                    "Broker reconcile acct=%s: rc=%s stderr=%s",
+                    acct_id,
+                    r.returncode,
+                    (r.stderr or "")[:400],
+                )
+                continue
+            j = json.loads(line)
+            pos = j.get("pos", "flat")
+            if pos not in ("flat", "long", "short"):
+                pos = "flat"
+            ref["pos"] = pos
+            n = int(j.get("n_positions", 0) or 0)
+            if n > 1:
+                logging.warning(
+                    "Broker acct=%s: %s separate positions (expected 0–1). "
+                    "Close extras in cTrader or: python -m src.execution --close-all --account-id %s",
+                    acct_id,
+                    n,
+                    acct_id,
+                )
+            logging.info("Broker reconcile acct=%s pos=%s (n_positions=%s)", acct_id, pos, n or "?")
+        except Exception as e:
+            logging.warning("Broker reconcile acct=%s failed: %s", acct_id, e)
+
+
 def _demo_broker_pos_after_action(action_taken: str) -> str | None:
     """If this action changed the real demo account, return new net position; else None."""
     at = (action_taken or "").strip().upper()
@@ -490,6 +540,16 @@ def _run_strategy(
     strategy_demo = bool(
         demo_broker and sid in DEMO_BROKER_REAL_ORDER_STRATEGY_IDS
     )
+    if strategy_demo and (
+        broker_position_ref is None or account_id_override is None
+    ):
+        logging.error(
+            "[%s] demo broker disabled this tick: missing broker_position_ref or "
+            "account_id_override — add sid to DEMO_CTRADER_ACCOUNT_BY_STRATEGY in "
+            "src/config_portfolio.py",
+            sid,
+        )
+        strategy_demo = False
     state_snapshot: str | None = None
     state_file_path = None
     try:
@@ -859,6 +919,7 @@ def _run_locked(
                 logging.info(
                     "Parallel paper sim: also persisting independent dry-run books under {id}_paper"
                 )
+            _reconcile_demo_broker_refs(broker_position_refs)
         results = [
             _run_strategy(
                 s,
