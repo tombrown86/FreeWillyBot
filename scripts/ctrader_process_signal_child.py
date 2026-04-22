@@ -25,6 +25,14 @@ if _env.exists():
 
 def main() -> None:
     data = json.loads(sys.stdin.read())
+
+    # `src.execution` calls `logging.basicConfig(handlers=[StreamHandler(sys.stdout), ...])`
+    # at import time, so any `logging.info(...)` it emits would corrupt the single JSON
+    # line the parent expects on our stdout. Redirect stdout → stderr BEFORE the import
+    # so the StreamHandler captures stderr, and only emit our JSON on the original stdout.
+    real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     from src.execution import process_signal
 
     at, br = process_signal(
@@ -33,6 +41,8 @@ def main() -> None:
         dry_run=bool(data["dry_run"]),
         account_id_override=data.get("account_id_override"),
     )
+
+    sys.stdout = real_stdout
     json.dump({"action_taken": at, "broker_response": br}, sys.stdout)
 
 
