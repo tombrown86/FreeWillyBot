@@ -383,6 +383,34 @@ def _ensure_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+# Shadow / portfolio observability columns (must stay in sync with _append_predictions_row).
+_PREDICTIONS_SHADOW_COLS: tuple[str, ...] = (
+    "underlying_signal",
+    "underlying_action",
+    "underlying_blocked",
+    "underlying_reason",
+    "underlying_desired_position",
+    "would_trade",
+    "portfolio_block_reason",
+)
+
+
+def _blocked_truthy(val) -> bool:
+    """Normalise blocked flags that may appear as bool, 0/1, or str."""
+    if val is True:
+        return True
+    if val is False or val is None:
+        return False
+    s = str(val).strip().lower()
+    if s in ("", "none", "nan"):
+        return False
+    return s in ("1", "true", "yes", "t")
+
+
+def _blocked_01(val) -> int:
+    return 1 if _blocked_truthy(val) else 0
+
+
 def _append_predictions_row(row: dict, run_at: str, strategy_id: str) -> None:
     csv_path = PROJECT_ROOT / PREDICTIONS_LIVE_CSV
     _ensure_dir(csv_path)
@@ -391,7 +419,7 @@ def _append_predictions_row(row: dict, run_at: str, strategy_id: str) -> None:
         "timestamp": row.get("timestamp", ""),
         "signal": row.get("signal", ""),
         "confidence": row.get("confidence", ""),
-        "blocked": row.get("blocked", ""),
+        "blocked": _blocked_01(row.get("blocked")),
         "reason": row.get("reason", ""),
         "action": row.get("action", ""),
         "P_buy": row.get("P_buy", ""),
@@ -402,6 +430,13 @@ def _append_predictions_row(row: dict, run_at: str, strategy_id: str) -> None:
         "signal_source": row.get("signal_source", ""),
         "bar_lag_hours": row.get("bar_lag_hours", ""),
         "run_at": run_at,
+        "underlying_signal": row.get("underlying_signal", ""),
+        "underlying_action": row.get("underlying_action", ""),
+        "underlying_blocked": row.get("underlying_blocked", ""),
+        "underlying_reason": row.get("underlying_reason", ""),
+        "underlying_desired_position": row.get("underlying_desired_position", ""),
+        "would_trade": row.get("would_trade", ""),
+        "portfolio_block_reason": row.get("portfolio_block_reason", ""),
     }
     fieldnames = list(write_row.keys())
     file_exists = csv_path.exists()
@@ -415,6 +450,14 @@ def _append_predictions_row(row: dict, run_at: str, strategy_id: str) -> None:
             )
             csv_path.rename(legacy)
             logging.info("Renamed predictions log without bar_lag_hours to %s", legacy.name)
+            needs_new_header = True
+            file_exists = False
+        elif first.strip() and any(c not in first for c in _PREDICTIONS_SHADOW_COLS):
+            legacy = csv_path.with_name(
+                csv_path.stem + "_legacy_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".csv"
+            )
+            csv_path.rename(legacy)
+            logging.info("Renamed predictions log without shadow columns to %s", legacy.name)
             needs_new_header = True
             file_exists = False
     with open(csv_path, "a", newline="") as f:
@@ -598,6 +641,17 @@ def _run_strategy(
         for i, row in enumerate(rows):
             row = dict(row)
             enrich_signal_desired_position(row)
+            # Snapshot strategy layer before portfolio permission (shadow logging).
+            u_sig = str(row.get("signal", "") or "")
+            u_act = str(row.get("action", "") or "")
+            u_blk = _blocked_01(row.get("blocked"))
+            u_rea = str(row.get("reason", "") or "")
+            try:
+                u_des = int(row.get("desired_position", 0) or 0)
+            except (TypeError, ValueError):
+                u_des = 0
+            would_trade = (u_des != 0) and (not _blocked_truthy(row.get("blocked")))
+
             # 1. Permission check — may override row to HOLD
             _allowed, _block_reason = is_strategy_allowed(
                 sid, row, _port_state, _PORTFOLIO_CFG
@@ -609,8 +663,10 @@ def _run_strategy(
                 row["signal"]           = "flat"
                 row["desired_position"] = 0
                 row["portfolio_target_units"] = 0.0
+                row["portfolio_block_reason"] = _block_reason
                 logging.info("[%s] portfolio blocked: %s", sid, _block_reason)
             else:
+                row["portfolio_block_reason"] = ""
                 # 2. Sizing + signed target (execution layer hint)
                 _tgt = get_target_position(
                     row, _port_state, _recent_closes, _PORTFOLIO_CFG, strategy_id=sid
@@ -618,6 +674,13 @@ def _run_strategy(
                 row["portfolio_size"]       = _tgt["size_abs"]
                 row["portfolio_target_units"] = _tgt["target_units"]
                 row["portfolio_size_note"]  = _tgt.get("note", "")
+            row["underlying_signal"] = u_sig
+            row["underlying_action"] = u_act
+            row["underlying_blocked"] = u_blk
+            row["underlying_reason"] = u_rea
+            row["underlying_desired_position"] = u_des
+            row["would_trade"] = "true" if would_trade else "false"
+            row["blocked"] = _blocked_01(row.get("blocked"))
             rows[i] = row
         # ── end portfolio permission + sizing ────────────────────────────
 

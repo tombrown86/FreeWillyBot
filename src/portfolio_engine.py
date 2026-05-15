@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -96,13 +97,39 @@ def save_portfolio_state(state: dict) -> None:
 
 
 def load_portfolio_config() -> dict:
-    """Load src.config_portfolio into a plain dict."""
+    """Load src.config_portfolio into a plain dict.
+
+    When the environment variable ``PORTFOLIO_RISK_PROFILE`` is set to
+    ``research`` (case-insensitive), PF kill / pause parameters are replaced
+    with ``PORTFOLIO_RESEARCH_*`` values so demo/research stacks are less
+    sensitive than production defaults. All other portfolio keys stay as in
+    ``config_portfolio``.
+    """
     from src import config_portfolio as cp
-    return {
+
+    cfg: dict[str, Any] = {
         k: getattr(cp, k)
         for k in dir(cp)
         if k.startswith("PORTFOLIO_")
     }
+    profile = (os.environ.get("PORTFOLIO_RISK_PROFILE") or "").strip().lower()
+    if profile == "research":
+        cfg["PORTFOLIO_KILL_PF_N"] = int(
+            cfg.get("PORTFOLIO_RESEARCH_KILL_PF_N", 50)
+        )
+        cfg["PORTFOLIO_KILL_PF_MIN"] = float(
+            cfg.get("PORTFOLIO_RESEARCH_KILL_PF_MIN", 0.75)
+        )
+        cfg["PORTFOLIO_PAUSE_HOURS"] = int(
+            cfg.get("PORTFOLIO_RESEARCH_PAUSE_HOURS", 2)
+        )
+        log.info(
+            "PORTFOLIO_RISK_PROFILE=research: using PF window N=%s min_pf=%s pause_h=%s",
+            cfg["PORTFOLIO_KILL_PF_N"],
+            cfg["PORTFOLIO_KILL_PF_MIN"],
+            cfg["PORTFOLIO_PAUSE_HOURS"],
+        )
+    return cfg
 
 
 def enrich_signal_desired_position(signal: dict) -> None:

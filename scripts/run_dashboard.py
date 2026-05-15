@@ -1498,6 +1498,7 @@ State file: <code>data/logs/execution/portfolio_state.json</code>.</p>
 <strong>run_at</strong> = wall-clock UTC when the job ran.
 <strong>readiness_0_100</strong> = rough how close to a trade (100 = this bar fired an open/close/reverse).
 <strong>trade_hint</strong> = plain-English: what is missing (confidence, vol, extreme pred, risk pause, etc.).
+When present, <strong>underlying_*</strong> / <strong>would_trade</strong> / <strong>portfolio_block_reason</strong> capture the strategy layer before the portfolio gate; use them when <strong>reason</strong> shows only <code>portfolio_cooldown</code> or <code>portfolio_pf_kill</code>.
 Use the filters below to narrow by strategy, signal, blocked flag, or text search.</p>
 <p class="signal-dist">{signal_dist}</p>
 {pred_html}

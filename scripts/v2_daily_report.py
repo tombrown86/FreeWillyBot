@@ -56,6 +56,29 @@ def _load_predictions(strategy_id: str, days: int) -> pd.DataFrame:
     return df[df["timestamp"] >= cutoff].copy()
 
 
+def _strategy_reason_for_metrics(df: pd.DataFrame) -> pd.Series:
+    """Prefer underlying_reason when portfolio blocked the row (shadow columns present)."""
+    if "reason" not in df.columns:
+        base = pd.Series("", index=df.index)
+    else:
+        base = df["reason"].fillna("").astype(str).str.strip()
+    if (
+        "underlying_reason" in df.columns
+        and "portfolio_block_reason" in df.columns
+    ):
+        pr = df["portfolio_block_reason"].fillna("").astype(str).str.strip()
+        ur = df["underlying_reason"].fillna("").astype(str).str.strip()
+        return ur.where(pr != "", base)
+    return base
+
+
+def _underlying_action_for_metrics(df: pd.DataFrame) -> pd.Series:
+    """Prefer underlying_action when portfolio shadow columns exist (for max_hold closes)."""
+    if "underlying_action" in df.columns:
+        return df["underlying_action"].fillna("").astype(str)
+    return df["action"].fillna("").astype(str) if "action" in df.columns else pd.Series("", index=df.index)
+
+
 def _load_trades(strategy_id: str, days: int) -> pd.DataFrame:
     """Load trade_decisions (demo mode only) for the strategy."""
     frames = []
@@ -231,16 +254,18 @@ def report(strategy_id: str, days: int) -> None:
         opens = len(day_pairs)
 
         # 2. Blocked by short_term_momentum
-        if not day_preds.empty and "reason" in day_preds.columns:
-            mom_blk = int((day_preds["reason"].str.strip() == "short_term_momentum").sum())
+        if not day_preds.empty:
+            rcol = _strategy_reason_for_metrics(day_preds)
+            mom_blk = int((rcol == "short_term_momentum").sum())
         else:
             mom_blk = 0
 
         # 3. Closes by max_hold (from predictions_live reason on CLOSE bars)
-        if not day_preds.empty and "reason" in day_preds.columns and "action" in day_preds.columns:
+        if not day_preds.empty:
+            rcol = _strategy_reason_for_metrics(day_preds)
+            uact = _underlying_action_for_metrics(day_preds)
             mxh_cls = int(
-                ((day_preds["reason"].str.strip() == "max_hold") &
-                 (day_preds["action"].str.contains("CLOSE", na=False))).sum()
+                ((rcol.str.strip() == "max_hold") & (uact.str.contains("CLOSE", na=False))).sum()
             )
         else:
             mxh_cls = 0

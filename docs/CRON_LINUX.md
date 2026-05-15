@@ -261,6 +261,18 @@ CLI equivalent: `python -m scripts.run_live_tick --demo-broker --parallel-paper`
 
 ---
 
+## Portfolio risk profile (demo / research)
+
+| Variable | Effect |
+|----------|--------|
+| `PORTFOLIO_RISK_PROFILE=research` | Relaxes rolling profit-factor kill parameters using `PORTFOLIO_RESEARCH_KILL_PF_N`, `PORTFOLIO_RESEARCH_KILL_PF_MIN`, and `PORTFOLIO_RESEARCH_PAUSE_HOURS` in [`src/config_portfolio.py`](../src/config_portfolio.py). Unset or any other value keeps production defaults (`PORTFOLIO_KILL_PF_*` / `PORTFOLIO_PAUSE_HOURS`). |
+
+Add to `.env` on the Linux host when you want a **less sensitive** PF kill loop for demo stacks (fewer multi-day cooldown re-arms from small samples). Livetick loads `.env` before importing portfolio config, so the profile applies at **process start** (cron job / manual run).
+
+**Predictions shadow columns:** `predictions_live.csv` includes `underlying_signal`, `underlying_action`, `underlying_blocked`, `underlying_reason`, `underlying_desired_position`, `would_trade`, and `portfolio_block_reason` so strategy-level reasons stay logged when the portfolio layer forces `HOLD` first. The first append after upgrade may **rotate** an old file without those headers to `data/predictions/predictions_live_legacy_YYYYMMDD_HHMMSS.csv` and start a fresh CSV.
+
+---
+
 ## Reset paper state, strategy state, and signal history
 
 From the repo root:

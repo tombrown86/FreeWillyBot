@@ -139,6 +139,12 @@ PORTFOLIO_KILL_PF_N:   int   = 20     # evaluate rolling PF after N combined clo
 PORTFOLIO_KILL_PF_MIN: float = 0.85   # pause if combined PF of last N trades < 0.85
 PORTFOLIO_PAUSE_HOURS: int   = 6      # cooldown duration after portfolio kill fires
 
+# Research / demo stack — applied only when ``PORTFOLIO_RISK_PROFILE=research`` (see portfolio_engine.load_portfolio_config).
+# Wider window, lower PF floor, shorter pause to avoid multi-day lockout from noisy small samples.
+PORTFOLIO_RESEARCH_KILL_PF_N:   int   = 50
+PORTFOLIO_RESEARCH_KILL_PF_MIN: float = 0.75
+PORTFOLIO_RESEARCH_PAUSE_HOURS: int = 2
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Stale data hard limit (portfolio level, stricter than per-strategy guards)
 # ─────────────────────────────────────────────────────────────────────────────
