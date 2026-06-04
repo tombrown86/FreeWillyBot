@@ -1,10 +1,10 @@
 {
-  "horizon": 6,
-  "model": "xgb",
-  "correlation": 0.03189925405028336,
-  "mae": 0.0004223052604591626,
-  "rmse": 0.0006383486753007401,
-  "directional_hit_rate": 0.5062614703659721,
-  "net_return": -0.2570192821315761,
-  "n_trades": 3278
+  "horizon": 12,
+  "model": "ridge",
+  "correlation": 0.015017175175760428,
+  "mae": 0.0004997732336518196,
+  "rmse": 0.0007867797893710998,
+  "directional_hit_rate": 0.5047818489816063,
+  "net_return": -0.0159898084005502,
+  "n_trades": 5401
 }

@@ -9,7 +9,7 @@ trade_decisions.csv and paper_simulation.csv. Use --no-execute for signals only.
 **Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), strategies listed
 in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders (each to its own login via
 ``DEMO_CTRADER_ACCOUNT_BY_STRATEGY``); others stay simulated (signals + paper equity still update).
-``regression_v2_trendfilter`` and ``mean_reversion_v1`` stay paper/sim on demo.
+``regression_v2_trendfilter`` stays paper/sim on demo. ``mean_reversion_v1`` is disabled.
 Still EXECUTION_PAPER_ONLY globally.
 """
 
@@ -67,9 +67,14 @@ _PRICE_PARQUET = PROJECT_ROOT / "data" / "processed" / "price" / "EURUSD_5min_cl
 # PORTFOLIO_EVENT_STRATEGY_IDS, register it AFTER continuous strategies so the same tick
 # can flatten regression before an event strategy sends orders (see portfolio_engine).
 STRATEGIES = [
-    {"id": "classifier_v1",              "module": "src.live_signal",                           "fn": "run"},
+    # classifier_v1 disabled 2026-06: logreg baseline precision=31% can't reach 60% confidence
+    # threshold; daily retrain stuck since Mar 2026 (Chronos-Bolt HuggingFace DNS failure).
+    # Re-enable after fixing retrain pipeline and reconsidering threshold.
+    # {"id": "classifier_v1",              "module": "src.live_signal",                           "fn": "run"},
     {"id": "regression_v1",              "module": "src.live_signal_regression",                "fn": "run"},
-    {"id": "mean_reversion_v1",          "module": "src.live_signal_mean_reversion",            "fn": "run"},
+    # mean_reversion_v1 disabled 2026-06: –2.2% paper equity over 13 trades, holds 1–6 bars (hits
+    # MR_HOLD_BARS max consistently), no clean reversion exit. Re-evaluate before re-enabling.
+    # {"id": "mean_reversion_v1",          "module": "src.live_signal_mean_reversion",            "fn": "run"},
     {"id": "regression_v2_trendfilter",  "module": "src.live_signal_regression_v2_trendfilter", "fn": "run"},
     {
         "id": "regression_v2_trendfilter_portfolio_vol",
@@ -84,7 +89,7 @@ STRATEGIES = [
 # Each strategy in this set should have its own account in DEMO_CTRADER_ACCOUNT_BY_STRATEGY.
 DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
     {
-        "classifier_v1",
+        # classifier_v1 removed 2026-06 (disabled in STRATEGIES above)
         "regression_v1",
         "regression_v2_trendfilter_portfolio_vol",
     }

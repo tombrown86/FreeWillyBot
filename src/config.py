@@ -21,10 +21,12 @@ FORECAST_HORIZON = 6
 TRAINING_START_DATE = date(2022, 1, 1)
 
 # Validation period start date (between train and test)
-VALIDATION_START_DATE = date(2023, 10, 1)
+# Shifted forward 15 months (2026-06 retrain): more training data, 2025+ test window
+VALIDATION_START_DATE = date(2024, 1, 1)
 
 # Test period start date (validation/test data begins here)
-TEST_START_DATE = date(2024, 1, 1)
+# Shifted to 2025-01-01 to get OOS evaluation on recent market structure
+TEST_START_DATE = date(2025, 1, 1)
 
 # Label horizon (bars ahead for future_return_30m; 6 bars = 30 min at 5min)
 LABEL_HORIZON_BARS = 6
@@ -177,8 +179,11 @@ RV2_TREND_RESAMPLE: str = "4h"   # resample period for HTF trend bar (4-hour bar
 RV2_TREND_MA_WINDOW: int = 10    # MA window on HTF bars — MA10 on 4h = ~40-hour trend
 
 # Selection — same thresholds as regression_v1 for direct comparison
-RV2_TOP_PCT: float = 1.0          # trade top/bottom 1% of predictions (wider than v1 to
-                                   # give trend filter enough trades to work with)
+# RV2_TOP_PCT=1.0 is deliberate: the 4h trend gate is the primary quality filter here.
+# Backtest comparison (frozen test Jan 2024–Mar 2026): top_pct=0.25 → +10.8% PF=1.64, 216 trades;
+# top_pct=1.0 → +18.5% PF=1.22, 1064 trades. Higher pct trades more but the trend gate limits
+# actual entries anyway. Change to 0.25 for more conservative / higher-PF operation.
+RV2_TOP_PCT: float = 1.0
 RV2_VOL_PCT: int = 30             # trade only when vol_6 in top 30%
 RV2_PRED_THRESHOLD: float = 0.0   # no minimum |pred| filter (trend gate is the primary filter)
 

@@ -1,8 +1,9 @@
 """
 Final validation — Rolling walk-forward for regression strategy.
 
-12 × 1-month windows, 6 × 2-month windows.
-Fixed config: top_pct=0.25, vol_pct=20, pred_threshold=0.00005.
+All available monthly windows in test_predictions (originally 12×1m / 6×2m;
+extended to cover the full test period). Fixed config: top_pct=0.25, vol_pct=20,
+pred_threshold=0.00005.
 """
 
 import logging
@@ -67,7 +68,7 @@ def run_walk_forward(
     dd_kill: float = 0.0,
     pause_bars: int = 0,
 ) -> tuple[list[dict], list[dict]]:
-    """Run 12×1m and 6×2m rolling windows. Returns (results_1m, results_2m)."""
+    """Run all available monthly windows. Returns (results_1m, results_2m)."""
     path = pred_path or (PREDICTIONS_DIR / "test_predictions.parquet")
     if not path.exists():
         raise FileNotFoundError(f"Test predictions not found: {path}. Run predict_regression_test first.")
@@ -79,10 +80,10 @@ def run_walk_forward(
     results_1m = []
     results_2m = []
 
-    # 12 × 1-month
+    # All available 1-month windows
     df["month"] = df["timestamp"].dt.strftime("%Y-%m")
     months = sorted(df["month"].dropna().unique())
-    for i, m in enumerate(months[:12]):
+    for i, m in enumerate(months):
         w = df[df["month"] == m]
         if len(w) < 100:
             continue
@@ -96,8 +97,8 @@ def run_walk_forward(
         results_1m.append(r)
         logging.info("1m window %s: net=%.4f PF=%.2f trades=%d", m, r["net_return"], r["profit_factor"], r["n_trades"])
 
-    # 6 × 2-month
-    for i in range(0, min(12, len(months) - 1), 2):
+    # All available 2-month windows (pairs)
+    for i in range(0, len(months) - 1, 2):
         m1, m2 = months[i], months[i + 1]
         w = df[df["month"].isin([m1, m2])]
         if len(w) < 100:
