@@ -928,7 +928,7 @@ def _run_locked(
                 refresh = False
             else:
                 proc = subprocess.Popen(
-                    [sys.executable, "-m", "scripts.run_daily_data_refresh"],
+                    [sys.executable, "-m", "scripts.run_daily_data_refresh", "--phase-a-only"],
                     cwd=PROJECT_ROOT,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -956,6 +956,18 @@ def _run_locked(
             logging.warning("cTrader live tail refresh timed out — using existing tail")
         except Exception as _ct_err:
             logging.warning("cTrader live tail refresh failed (%s) — using existing tail", _ct_err)
+
+        now = datetime.now(timezone.utc)
+        tail_end = _feature_tail_end_utc()
+        if tail_end is not None:
+            tail_age_min = (now - tail_end).total_seconds() / 60.0
+            if tail_age_min > LIVETICK_FEATURE_STALE_MINUTES:
+                logging.warning(
+                    "Feature tail still stale after refresh attempt: last bar %s (%.0f min old). "
+                    "Check data refresh / cTrader token; ticks may be blocked by portfolio_stale_bar.",
+                    tail_end.strftime("%Y-%m-%d %H:%M UTC"),
+                    tail_age_min,
+                )
 
         if parallel_paper_sim and not demo_broker:
             logging.warning("Parallel paper sim is only used with demo broker — ignoring")

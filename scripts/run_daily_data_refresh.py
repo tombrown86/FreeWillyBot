@@ -77,7 +77,7 @@ def _run_step(name: str, func, use_retry: bool = False) -> bool:
         return False
 
 
-def run(start: datetime | None = None, end: datetime | None = None) -> int:
+def run(start: datetime | None = None, end: datetime | None = None, *, phase_a_only: bool = False) -> int:
     """
     Run full data refresh in two phases:
 
@@ -160,6 +160,10 @@ def run(start: datetime | None = None, end: datetime | None = None) -> int:
     )
     logging.info("Phase A complete — features updated, live tick will use fresh bars")
 
+    if phase_a_only:
+        logging.info("Skipping Phase B (--phase-a-only)")
+        return 0
+
     # ── Phase B: slow steps — failures are logged but don't fail the job ─────
     phase_b = [
         ("download_news", do_download_news, True),
@@ -199,6 +203,11 @@ if __name__ == "__main__":
         default=None,
         help="Skip if a successful refresh already ran within this many hours (used by RunAtLoad catch-up)",
     )
+    parser.add_argument(
+        "--phase-a-only",
+        action="store_true",
+        help="Run Phase A only (skip news/forecasters). Used by livetick auto-refresh.",
+    )
     args = parser.parse_args()
 
     if args.skip_if_recent is not None:
@@ -218,5 +227,5 @@ if __name__ == "__main__":
     if args.end:
         end_dt = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
 
-    exit_code = run(start=start_dt, end=end_dt)
+    exit_code = run(start=start_dt, end=end_dt, phase_a_only=args.phase_a_only)
     sys.exit(exit_code)
