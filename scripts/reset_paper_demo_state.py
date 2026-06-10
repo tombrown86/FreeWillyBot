@@ -196,7 +196,6 @@ def main() -> int:
         for name in (
             "regression_v1_state.json",
             "regression_v2_trendfilter_state.json",
-            "regression_v2_trendfilter_portfolio_vol_state.json",
         ):
             path = EXEC / name
             path.parent.mkdir(parents=True, exist_ok=True)

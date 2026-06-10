@@ -8,8 +8,8 @@ trade_decisions.csv and paper_simulation.csv. Use --no-execute for signals only.
 
 **Demo broker**: With --demo-broker (or RUN_LIVETICK_DEMO_BROKER=1), strategies listed
 in ``DEMO_BROKER_REAL_ORDER_STRATEGY_IDS`` send real orders (each to its own login via
-``DEMO_CTRADER_ACCOUNT_BY_STRATEGY``); others stay simulated (signals + paper equity still update).
-``regression_v2_trendfilter`` stays paper/sim on demo. ``mean_reversion_v1`` is disabled.
+``DEMO_CTRADER_ACCOUNT_BY_STRATEGY``). Jun 2026 persistence phase: only ``regression_v1``
+and ``regression_v2_trendfilter`` run; both use dedicated demo accounts.
 Still EXECUTION_PAPER_ONLY globally.
 """
 
@@ -76,11 +76,8 @@ STRATEGIES = [
     # MR_HOLD_BARS max consistently), no clean reversion exit. Re-evaluate before re-enabling.
     # {"id": "mean_reversion_v1",          "module": "src.live_signal_mean_reversion",            "fn": "run"},
     {"id": "regression_v2_trendfilter",  "module": "src.live_signal_regression_v2_trendfilter", "fn": "run"},
-    {
-        "id": "regression_v2_trendfilter_portfolio_vol",
-        "module": "src.live_signal_regression_v2_trendfilter",
-        "fn": "run",
-    },
+    # regression_v2_trendfilter_portfolio_vol disabled 2026-06: persistence phase uses base v2 only.
+    # {"id": "regression_v2_trendfilter_portfolio_vol", "module": "src.live_signal_regression_v2_trendfilter", "fn": "run"},
     # session_breakout_v1 disabled 2026-03: 27/27 parameter combos losing, structural rejection
     # {"id": "session_breakout_v1", "module": "src.live_signal_session_breakout", "fn": "run"},
 ]
@@ -89,9 +86,8 @@ STRATEGIES = [
 # Each strategy in this set should have its own account in DEMO_CTRADER_ACCOUNT_BY_STRATEGY.
 DEMO_BROKER_REAL_ORDER_STRATEGY_IDS: frozenset[str] = frozenset(
     {
-        # classifier_v1 removed 2026-06 (disabled in STRATEGIES above)
         "regression_v1",
-        "regression_v2_trendfilter_portfolio_vol",
+        "regression_v2_trendfilter",
     }
 )
 

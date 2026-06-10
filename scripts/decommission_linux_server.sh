@@ -67,7 +67,7 @@ if [ -x "$PY" ]; then
   echo "--- Closing demo positions ---"
   "$PY" scripts/verify_demo_accounts.py 2>&1 || true
   "$PY" scripts/reset_paper_demo_state.py --close-all-accounts --also-strategy-state --signals 2>&1 || true
-  for acct in 4247810 4243419 4247812 4247811; do
+  for acct in 4247810 4243419; do
     echo "Net position check ${acct}:"
     "$PY" scripts/ctrader_net_position.py "$acct" 2>&1 || true
   done

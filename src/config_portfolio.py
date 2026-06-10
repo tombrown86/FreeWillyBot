@@ -42,8 +42,9 @@ PORTFOLIO_PRIMARY_STRATEGY_ID: str = "regression_v2_trendfilter"
 # can prefer flattening non-event strategies first. Empty list = no event strategies yet.
 PORTFOLIO_EVENT_STRATEGY_IDS: tuple[str, ...] = ()
 
-# Paper evaluation window (batch 8 — manual; no code enforces this)
-PORTFOLIO_PAPER_EVAL_WEEKS: int = 4
+# Paper evaluation window — persistence phase target: 3–6 months uninterrupted demo.
+# Track with scripts/demo_persistence_report.py (trade count, PF, max DD, monthly returns).
+PORTFOLIO_PAPER_EVAL_WEEKS: int = 26
 
 # Broker lot step (cTrader micro-lot increments). Used when rounding final size.
 PORTFOLIO_LOT_STEP: float = 0.01
@@ -51,15 +52,10 @@ PORTFOLIO_LOT_STEP: float = 0.01
 # Sizing stack per strategy: "full" (vol×trend×DD×streak), "vol_only", "fixed" (base only)
 PORTFOLIO_SIZING_MODE_DEFAULT: str = "full"
 
-PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {
-    # Vol-only stack (no trend/DD/streak multipliers) — distinct from base v2 "full" sizing.
-    "regression_v2_trendfilter_portfolio_vol": "vol_only",
-}
+PORTFOLIO_SIZING_MODE_BY_STRATEGY: dict[str, str] = {}
 
 PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
-    # v2 pair each have their own demo account now; no sibling deferral needed.
-    "regression_v2_trendfilter":              [],
-    "regression_v2_trendfilter_portfolio_vol": [],
+    "regression_v2_trendfilter": [],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,10 +67,9 @@ PORTFOLIO_STRATEGY_SIBLINGS: dict[str, list[str]] = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 DEMO_CTRADER_ACCOUNT_BY_STRATEGY: dict[str, int] = {
-    # B/D + spare A: mean_reversion_v1 is sim-only. Login 4247811 is unused (extra Pepperstone demo).
+    # Persistence phase (Jun 2026): two strategies, two dedicated demo logins.
     "regression_v1": 4247810,
-    "regression_v2_trendfilter_portfolio_vol": 4243419,
-    "classifier_v1": 4247812,
+    "regression_v2_trendfilter": 4243419,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
