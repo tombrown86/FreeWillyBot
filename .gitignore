@@ -1,4 +1,7 @@
 .env
+.env.live
+data/migration_archive/
+data/migration_archive_*.tar.gz
 .venv/
 __pycache__/
 *.pyc
